@@ -5,8 +5,8 @@ from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.models import SyncCursor
-from app.services.importers.base import upsert_character_from_external, upsert_media_from_external
-from app.services.translation import fetch_shikimori_character_ru, fetch_shikimori_ru
+from app.services.importers.base import clean_html_markup, upsert_character_from_external, upsert_media_from_external
+from app.services.translation import fetch_shikimori_character_ru, fetch_shikimori_ru, translate_text
 
 ANILIST_SEARCH_QUERY = """
 query ($search: String, $type: MediaType, $perPage: Int) {
@@ -335,7 +335,7 @@ async def import_batch_from_anilist(
             else:
                 break
 
-    sem = asyncio.Semaphore(8)
+    sem = asyncio.Semaphore(10)
 
     async def _resolve_media_ru(item: dict) -> tuple[str, str]:
         titles = item.get("title") or {}
@@ -343,15 +343,23 @@ async def import_batch_from_anilist(
         m_type, _, _ = _map_anilist_type(item)
         shiki_kind = "animes" if m_type == "anime" else "mangas"
         async with sem:
-            return await fetch_shikimori_ru(
+            ru_title, ru_desc = await fetch_shikimori_ru(
                 kind=shiki_kind,
                 mal_id=item.get("idMal"),
                 search_title=titles.get("romaji") or canonical,
             )
+            if not ru_title:
+                ru_title, _ = await translate_text(canonical, "ru")
+            if not ru_desc and item.get("description"):
+                ru_desc, _ = await translate_text(clean_html_markup(item.get("description")), "ru")
+            return ru_title or canonical, ru_desc
 
     async def _resolve_char_ru(name: str) -> str:
         async with sem:
-            return await fetch_shikimori_character_ru(name)
+            ru_name = await fetch_shikimori_character_ru(name)
+            if not ru_name:
+                ru_name, _ = await translate_text(name, "ru")
+            return ru_name or name
 
     media_ru_list = await asyncio.gather(*[_resolve_media_ru(it) for it in candidates])
 
@@ -362,8 +370,9 @@ async def import_batch_from_anilist(
             cname = (node.get("name") or {}).get("full")
             if cname:
                 char_names_to_lookup.append(cname)
-    char_ru_results = await asyncio.gather(*[_resolve_char_ru(n) for n in char_names_to_lookup])
-    char_ru_map = dict(zip(char_names_to_lookup, char_ru_results))
+    unique_names = list(dict.fromkeys(char_names_to_lookup))
+    char_ru_results = await asyncio.gather(*[_resolve_char_ru(n) for n in unique_names])
+    char_ru_map = dict(zip(unique_names, char_ru_results))
 
     imported: list[dict] = []
     for item, (ru_title, ru_desc) in zip(candidates, media_ru_list):

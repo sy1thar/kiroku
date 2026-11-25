@@ -25,15 +25,12 @@
       </div>
       <strong class="user-nick-text" style="font-size:1.15rem; {% if primary_crole %}color:{{ primary_crole.nick_color }};{% endif %}">{{ current_user.username }}</strong>
       <div style="color:var(--muted); font-size:0.86rem; margin-top:4px;">{{ current_user.email }}</div>
-      {% if current_user.custom_role_links %}
-      <div style="display:flex; flex-wrap:wrap; justify-content:center; gap:6px; margin-top:12px;">
-        {% for link in current_user.custom_role_links %}
-        <span class="badge" style="background:{{ link.role.badge_color }}22; border-color:{{ link.role.badge_color }}; color:{{ link.role.badge_color }};">
-          {{ link.role.name }}
-        </span>
-        {% endfor %}
+      <div style="margin-top:12px;">
+        {% set target_user = current_user %}
+        {% set badge_justify = 'center' %}
+        {% set allow_unassign_custom = false %}
+        {% include "_user_roles_badges.html" %}
       </div>
-      {% endif %}
       {% if current_user.bio %}
       <p style="font-size:0.86rem; color:#d6deed; margin-top:12px;">{{ current_user.bio }}</p>
       {% endif %}

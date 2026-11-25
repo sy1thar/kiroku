@@ -91,7 +91,7 @@ def require_user(request: Request, db: Session) -> User:
 
 def require_moderator_or_admin(request: Request, db: Session) -> User:
     user = require_user(request, db)
-    if user.role not in ("moderator", "admin"):
+    if user.role not in ("moderator", "admin") and not user.is_moderator:
         raise HTTPException(status_code=403, detail="Moderator or Admin role required")
     return user
 

@@ -24,7 +24,7 @@
         <a class="nav-link" href="/{{ locale }}/characters">{{ ui.nav_characters }}</a>
         <a class="nav-link" href="/{{ locale }}/lists">{{ ui.nav_lists }}</a>
         <a class="nav-link" href="/{{ locale }}/about">{{ ui.nav_about }}</a>
-        {% if current_user and current_user.role in ('moderator', 'admin') %}
+        {% if current_user and (current_user.role in ('moderator', 'admin') or current_user.is_moderator) %}
         <a class="nav-link" href="/{{ locale }}/moderation">{{ ui.nav_moderation }}</a>
         {% endif %}
         {% if current_user and current_user.role == 'admin' %}

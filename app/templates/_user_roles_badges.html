@@ -1,0 +1,20 @@
+<div style="display:flex; flex-wrap:wrap; gap:6px; align-items:center; justify-content:{{ badge_justify | default('center') }};">
+  {% if target_user.role == 'admin' %}
+  <span class="badge" style="background:rgba(245,158,11,0.16); border-color:#f59e0b; color:#fcd34d;">
+    ★ {{ "Админ" if locale == "ru" else "Admin" }}
+  </span>
+  {% endif %}
+  {% if target_user.role == 'moderator' or target_user.is_moderator %}
+  <span class="badge" style="background:rgba(34,197,94,0.16); border-color:#22c55e; color:#6ee7b7;">
+    ✦ {{ "Модератор" if locale == "ru" else "Moderator" }}
+  </span>
+  {% endif %}
+  {% for link in target_user.custom_role_links %}
+  <span class="badge" style="background:{{ link.role.badge_color }}22; border-color:{{ link.role.badge_color }}; color:{{ link.role.badge_color }};">
+    {{ link.role.name }}
+    {% if allow_unassign_custom %}
+    <button type="button" onclick="unassignCustomRole('{{ target_user.username }}', {{ link.role.id }})" style="background:none; border:none; color:inherit; cursor:pointer; padding:0 0 0 4px; font-weight:800;">×</button>
+    {% endif %}
+  </span>
+  {% endfor %}
+</div>

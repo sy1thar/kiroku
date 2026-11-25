@@ -13,20 +13,13 @@
     {% endif %}
   </div>
 
-  <h1 class="user-nick-text" style="margin:0 0 6px; {% if primary_crole %}color:{{ primary_crole.nick_color }};{% endif %}">
+  <h1 class="user-nick-text" style="margin:0 0 10px; {% if primary_crole %}color:{{ primary_crole.nick_color }};{% endif %}">
     {{ profile_user.username }}
   </h1>
-  <div style="color:var(--muted); font-size:0.86rem;">{{ profile_user.role.upper() }}</div>
-
-  {% if profile_user.custom_role_links %}
-  <div style="display:flex; flex-wrap:wrap; justify-content:center; gap:8px; margin-top:14px;">
-    {% for link in profile_user.custom_role_links %}
-    <span class="badge" style="background:{{ link.role.badge_color }}22; border-color:{{ link.role.badge_color }}; color:{{ link.role.badge_color }};">
-      {{ link.role.name }}
-    </span>
-    {% endfor %}
-  </div>
-  {% endif %}
+  {% set target_user = profile_user %}
+  {% set badge_justify = 'center' %}
+  {% set allow_unassign_custom = false %}
+  {% include "_user_roles_badges.html" %}
 
   {% if profile_user.bio %}
   <p style="margin-top:16px; color:#d6deed; white-space:pre-line;">{{ profile_user.bio }}</p>

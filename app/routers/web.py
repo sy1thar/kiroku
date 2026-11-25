@@ -333,7 +333,7 @@ def import_localized(locale: str, request: Request, db: Session = Depends(get_db
 
 def _render_moderation(request: Request, locale: str, db: Session) -> HTMLResponse:
     user = get_current_user(request, db)
-    can_moderate = bool(user and user.role in ("moderator", "admin"))
+    can_moderate = bool(user and (user.role in ("moderator", "admin") or user.is_moderator))
     revs = list(db.scalars(select(Revision).order_by(desc(Revision.created_at)).limit(50)).all())
     ctx = _base_context(request, locale, f"{t_ui(locale)['nav_moderation']} — Kiroku", "/moderation", db)
     ctx["revisions"] = revs

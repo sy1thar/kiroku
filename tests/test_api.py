@@ -367,12 +367,34 @@ def test_community_appearance_custom_traits_and_cosmetic_roles(client: TestClien
             )
             assert asg.status_code == 200
 
-    # Public & private profile pages render custom badges, nick color, and avatar frame
+    # Admin can also grant moderator role to themselves without losing admin
+    self_mod = client.post(
+        "/api/admin/users/by-username/role",
+        json={"username": "Ikazych1", "role": "moderator"},
+    )
+    assert self_mod.status_code == 200
+    assert self_mod.json()["role"] == "admin"
+    assert self_mod.json()["is_moderator"] is True
+
+    # Admin page uses custom Kiroku swatch picker instead of OS color dialog
+    admin_html = client.get("/ru/admin").text
+    assert 'type="color"' not in admin_html
+    assert "data-picker-target" in admin_html
+
+    # Public & private profile pages render Admin, Moderator, and all custom badges
     pub = client.get("/ru/u/Ikazych1")
     assert pub.status_code == 200
+    assert "Админ" in pub.text
+    assert "Модератор" in pub.text
     assert "Охотник S-ранга" in pub.text
     assert "Хранитель Лора" in pub.text
     assert "frame-glow" in pub.text
+
+    priv = client.get("/ru/profile")
+    assert priv.status_code == 200
+    assert "Админ" in priv.text
+    assert "Модератор" in priv.text
+    assert "Охотник S-ранга" in priv.text
 
     # Cosmetic roles grant NO technical permissions to cosmetic_user
     client.post("/api/auth/login", json={"login": "cosmetic_user", "password": "secret123"})

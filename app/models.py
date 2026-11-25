@@ -239,6 +239,7 @@ class User(Base):
     email: Mapped[str] = mapped_column(String(160), unique=True, index=True)
     password_hash: Mapped[str] = mapped_column(String(255))
     role: Mapped[str] = mapped_column(String(24), default="user")  # user | moderator | admin
+    is_moderator: Mapped[bool] = mapped_column(Boolean, default=False)
     avatar_url: Mapped[str] = mapped_column(Text, default="")
     bio: Mapped[str] = mapped_column(Text, default="")
     preferred_locale: Mapped[str] = mapped_column(String(10), default="ru")

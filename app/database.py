@@ -52,6 +52,7 @@ def _ensure_user_columns() -> None:
         return
     existing_cols = {col["name"] for col in inspector.get_columns("users")}
     alterations = {
+        "is_moderator": "BOOLEAN DEFAULT FALSE",
         "avatar_url": "TEXT DEFAULT ''",
         "bio": "TEXT DEFAULT ''",
         "preferred_locale": "VARCHAR(10) DEFAULT 'ru'",

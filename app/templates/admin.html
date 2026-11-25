@@ -10,7 +10,7 @@
 
 <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:18px;">
   <button class="btn btn-primary btn-sm admin-tab-btn" onclick="switchAdminTab('users', this)">{{ "Пользователи и роли" if locale == "ru" else "Users & Roles" }} ({{ users|length }})</button>
-  <button class="btn btn-secondary btn-sm admin-tab-btn" onclick="switchAdminTab('custom', this)">{{ "Кастомные роли (Рамки и цвета)" if locale == "ru" else "Custom Cosmetic Roles" }} ({{ custom_roles|length }})</button>
+  <button class="btn btn-secondary btn-sm admin-tab-btn" onclick="switchAdminTab('custom', this)">{{ "Все роли (Рамки и цвета)" if locale == "ru" else "All Roles & Cosmetics" }} ({{ custom_roles|length + 2 }})</button>
   <button class="btn btn-secondary btn-sm admin-tab-btn" onclick="switchAdminTab('media', this)">{{ "Тайтлы" if locale == "ru" else "Titles" }} ({{ media_items|length }})</button>
   <button class="btn btn-secondary btn-sm admin-tab-btn" onclick="switchAdminTab('chars', this)">{{ "Персонажи" if locale == "ru" else "Characters" }} ({{ characters|length }})</button>
   <button class="btn btn-secondary btn-sm admin-tab-btn" onclick="switchAdminTab('tools', this)">{{ "Инструменты" if locale == "ru" else "Tools" }}</button>
@@ -24,12 +24,12 @@
         <label>{{ "Никнейм пользователя" if locale == "ru" else "Username" }}</label>
         <input type="text" name="role_target_nick" autocomplete="new-password" data-lpignore="true" placeholder="{{ 'Введите ник вручную...' if locale == 'ru' else 'Type username...' }}" required />
       </div>
-      <div class="field-group" style="max-width:200px;">
+      <div class="field-group" style="max-width:210px;">
         <label>{{ "Системная роль" if locale == "ru" else "System Role" }}</label>
         <select name="role">
-          <option value="moderator">moderator</option>
-          <option value="admin">admin</option>
-          <option value="user">user</option>
+          <option value="moderator">moderator (Модератор)</option>
+          <option value="admin">admin (Админ)</option>
+          <option value="user">user (Снять модерку/права)</option>
         </select>
       </div>
       <button class="btn btn-primary" type="submit">{{ "Выдать роль" if locale == "ru" else "Assign Role" }}</button>
@@ -37,39 +37,32 @@
   </div>
 
   <div class="panel">
-    <h3>{{ "Список пользователей и их кастомные роли" if locale == "ru" else "Users & Assigned Badges" }}</h3>
+    <h3>{{ "Список пользователей и все их роли" if locale == "ru" else "Users & All Roles" }}</h3>
     <div class="field-group" style="margin-bottom:12px;">
       <input type="search" name="user_filter_q" autocomplete="off" placeholder="{{ 'Поиск пользователя...' if locale == 'ru' else 'Filter users...' }}" oninput="filterRows('user-row', this.value)" />
     </div>
     <div style="display:grid; gap:8px;">
       {% for u in users %}
-      <div class="user-row" data-search="{{ (u.username ~ ' ' ~ u.email ~ ' ' ~ u.role)|lower }}" style="display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; padding:10px 12px; border:1px solid var(--border); border-radius:10px; background:var(--bg-soft);">
-        <div>
-          <a href="/{{ locale }}/u/{{ u.username }}" style="font-weight:700;">{{ u.username }}</a>
-          <span style="color:var(--muted); font-size:0.85rem;">· {{ u.email }}</span>
-          <span class="badge" style="margin-left:6px;">{{ u.role }}</span>
-          {% if u.custom_role_links %}
-          <div style="display:flex; flex-wrap:wrap; gap:6px; margin-top:6px;">
-            {% for link in u.custom_role_links %}
-            <span class="badge" style="background:{{ link.role.badge_color }}22; border-color:{{ link.role.badge_color }}; color:{{ link.role.badge_color }};">
-              {{ link.role.name }}
-              <button type="button" onclick="unassignCustomRole('{{ u.username }}', {{ link.role.id }})" style="background:none; border:none; color:inherit; cursor:pointer; padding:0 0 0 4px; font-weight:800;">×</button>
-            </span>
-            {% endfor %}
+      <div class="user-row" data-search="{{ (u.username ~ ' ' ~ u.email ~ ' ' ~ u.role)|lower }}" style="display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; padding:12px; border:1px solid var(--border); border-radius:10px; background:var(--bg-soft);">
+        <div style="display:grid; gap:6px;">
+          <div>
+            <a href="/{{ locale }}/u/{{ u.username }}" style="font-weight:700;">{{ u.username }}</a>
+            <span style="color:var(--muted); font-size:0.85rem;">· {{ u.email }}</span>
           </div>
-          {% endif %}
+          {% set target_user = u %}
+          {% set badge_justify = 'flex-start' %}
+          {% set allow_unassign_custom = true %}
+          {% include "_user_roles_badges.html" %}
         </div>
         <div style="display:flex; align-items:center; gap:8px;">
-          {% if u.id != current_user.id %}
           <select id="role-{{ u.id }}" style="padding:6px 10px; border-radius:8px; background:var(--card); color:var(--text); border:1px solid var(--border-strong);">
-            <option value="user" {% if u.role == "user" %}selected{% endif %}>user</option>
-            <option value="moderator" {% if u.role == "moderator" %}selected{% endif %}>moderator</option>
+            <option value="moderator" {% if u.is_moderator or u.role == "moderator" %}selected{% endif %}>moderator</option>
             <option value="admin" {% if u.role == "admin" %}selected{% endif %}>admin</option>
+            <option value="user" {% if u.role == "user" and not u.is_moderator %}selected{% endif %}>user</option>
           </select>
           <button class="btn btn-primary btn-sm" onclick="setUserRole({{ u.id }})">{{ "Сохранить" if locale == "ru" else "Save" }}</button>
+          {% if u.id != current_user.id %}
           <button class="btn btn-secondary btn-sm" style="color:#fda4af;" onclick="deleteUser({{ u.id }})">{{ "Удалить" if locale == "ru" else "Delete" }}</button>
-          {% else %}
-          <span class="badge" style="color:#fcd34d;">{{ "Вы (Главный админ)" if locale == "ru" else "You (Admin)" }}</span>
           {% endif %}
         </div>
       </div>
@@ -80,59 +73,67 @@
 
 <div id="tab-custom" class="admin-tab" style="display:none;">
   <div class="panel">
-    <h3>{{ "Создать любую кастомную роль (только украшение, без прав доступа)" if locale == "ru" else "Create Custom Cosmetic Role" }}</h3>
-    <form id="create-custom-role-form" autocomplete="off" style="display:grid; gap:12px;">
+    <h3>{{ "Создать кастомную роль (в стилистике Kiroku)" if locale == "ru" else "Create Custom Cosmetic Role" }}</h3>
+    <form id="create-custom-role-form" autocomplete="off" style="display:grid; gap:14px;">
       <div style="display:flex; gap:12px; flex-wrap:wrap;">
-        <div class="field-group" style="min-width:220px;">
+        <div class="field-group" style="min-width:240px;">
           <label>{{ "Название роли (любое)" if locale == "ru" else "Role Name (any)" }}</label>
-          <input type="text" name="crole_name" autocomplete="off" placeholder="Охотник S-ранга / VIP / Легенда..." required />
+          <input type="text" id="crole-name-input" name="crole_name" autocomplete="off" placeholder="Охотник S-ранга / VIP / Легенда..." required oninput="updateRolePreview()" />
         </div>
-        <div class="field-group" style="max-width:160px;">
-          <label>{{ "Цвет бейджа" if locale == "ru" else "Badge Color" }}</label>
-          <input type="color" name="badge_color" value="#7c6bff" style="height:38px; padding:2px;" />
-        </div>
-        <div class="field-group" style="max-width:160px;">
-          <label>{{ "Цвет ника" if locale == "ru" else "Nick Color" }}</label>
-          <input type="color" name="nick_color" value="#fcd34d" style="height:38px; padding:2px;" />
-        </div>
-        <div class="field-group" style="min-width:170px;">
+        <div class="field-group" style="min-width:200px; max-width:240px;">
           <label>{{ "Рамка аватара" if locale == "ru" else "Avatar Frame" }}</label>
-          <select name="avatar_frame">
+          <select id="crole-frame-select" name="avatar_frame" onchange="updateRolePreview()">
             <option value="glow">{{ "Свечение (Glow)" if locale == "ru" else "Glow" }}</option>
             <option value="solid">{{ "Обычная (Solid)" if locale == "ru" else "Solid" }}</option>
             <option value="rainbow">{{ "Радужная (Rainbow)" if locale == "ru" else "Rainbow" }}</option>
             <option value="none">{{ "Без рамки" if locale == "ru" else "None" }}</option>
           </select>
         </div>
-        <div class="field-group" style="max-width:160px;">
-          <label>{{ "Цвет рамки" if locale == "ru" else "Frame Color" }}</label>
-          <input type="color" name="frame_color" value="#f59e0b" style="height:38px; padding:2px;" />
+      </div>
+
+      <div class="grid-3" style="grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));">
+        <div class="color-picker-card">
+          <label style="font-size:0.8rem; color:var(--muted); font-weight:600;">{{ "Цвет бейджа" if locale == "ru" else "Badge Color" }}</label>
+          <div class="color-swatch-row" data-picker-target="badge_color"></div>
+          <input type="text" class="hex-mini-input" id="input-badge_color" name="badge_color" value="#7c6bff" oninput="syncHexInput('badge_color')" />
+        </div>
+        <div class="color-picker-card">
+          <label style="font-size:0.8rem; color:var(--muted); font-weight:600;">{{ "Цвет ника" if locale == "ru" else "Nick Color" }}</label>
+          <div class="color-swatch-row" data-picker-target="nick_color"></div>
+          <input type="text" class="hex-mini-input" id="input-nick_color" name="nick_color" value="#fcd34d" oninput="syncHexInput('nick_color')" />
+        </div>
+        <div class="color-picker-card">
+          <label style="font-size:0.8rem; color:var(--muted); font-weight:600;">{{ "Цвет рамки аватара" if locale == "ru" else "Frame Color" }}</label>
+          <div class="color-swatch-row" data-picker-target="frame_color"></div>
+          <input type="text" class="hex-mini-input" id="input-frame_color" name="frame_color" value="#f59e0b" oninput="syncHexInput('frame_color')" />
         </div>
       </div>
-      <button class="btn btn-primary" type="submit" style="width:max-content;">{{ "Создать роль" if locale == "ru" else "Create Role" }}</button>
+
+      <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:14px; padding:12px 14px; border:1px solid var(--border); border-radius:12px; background:var(--bg-soft);">
+        <div style="display:flex; align-items:center; gap:12px;">
+          <div id="preview-avatar" class="avatar-frame-wrap frame-glow" style="width:46px; height:46px; border-radius:999px; background:linear-gradient(135deg, var(--accent), #38bdf8); display:grid; place-items:center; font-weight:800; border:2px solid #f59e0b; --frame-color:#f59e0b;">
+            {{ current_user.username[:2].upper() }}
+          </div>
+          <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+            <strong id="preview-nick" style="color:#fcd34d;">{{ current_user.username }}</strong>
+            <span id="preview-badge" class="badge" style="background:#7c6bff22; border-color:#7c6bff; color:#7c6bff;">VIP</span>
+          </div>
+        </div>
+        <button class="btn btn-primary" type="submit">{{ "Создать роль" if locale == "ru" else "Create Role" }}</button>
+      </div>
     </form>
   </div>
 
   <div class="panel">
-    <h3>{{ "Выдать кастомную роль любому пользователю (включая себя, сколько угодно ролей)" if locale == "ru" else "Assign Custom Role to Any User" }}</h3>
-    {% if custom_roles %}
-    <form id="assign-custom-role-form" autocomplete="off" style="display:flex; gap:10px; flex-wrap:wrap; align-items:flex-end;">
-      <div class="field-group" style="max-width:250px;">
-        <label>{{ "Никнейм пользователя" if locale == "ru" else "Username" }}</label>
-        <input type="text" name="custom_target_nick" autocomplete="new-password" data-lpignore="true" placeholder="{{ 'Ник (например Ikazych1)...' if locale == 'ru' else 'Username...' }}" required />
-      </div>
-      <div class="field-group" style="max-width:260px;">
-        <label>{{ "Выберите роль" if locale == "ru" else "Select Role" }}</label>
-        <select name="role_id">
-          {% for cr in custom_roles %}
-          <option value="{{ cr.id }}">{{ cr.name }} ({{ cr.avatar_frame }})</option>
-          {% endfor %}
-        </select>
-      </div>
-      <button class="btn btn-primary" type="submit">{{ "Надеть роль на профиль" if locale == "ru" else "Assign Role" }}</button>
-    </form>
+    <h3>{{ "Все роли на сайте и выдача кастомных ролей" if locale == "ru" else "All Roles & Assignment" }}</h3>
 
-    <div style="display:flex; flex-wrap:wrap; gap:10px; margin-top:16px;">
+    <div style="display:flex; flex-wrap:wrap; gap:10px; margin-bottom:16px;">
+      <div style="display:flex; align-items:center; gap:8px; padding:8px 12px; border:1px solid #f59e0b; border-radius:10px; background:rgba(245,158,11,0.12);">
+        <span style="color:#fcd34d; font-weight:700;">★ {{ "Админ (Системная роль)" if locale == "ru" else "Admin (System)" }}</span>
+      </div>
+      <div style="display:flex; align-items:center; gap:8px; padding:8px 12px; border:1px solid #22c55e; border-radius:10px; background:rgba(34,197,94,0.12);">
+        <span style="color:#6ee7b7; font-weight:700;">✦ {{ "Модератор (Системная роль)" if locale == "ru" else "Moderator (System)" }}</span>
+      </div>
       {% for cr in custom_roles %}
       <div style="display:flex; align-items:center; gap:8px; padding:8px 12px; border:1px solid {{ cr.badge_color }}; border-radius:10px; background:{{ cr.badge_color }}18;">
         <span style="color:{{ cr.nick_color }}; font-weight:700;">{{ cr.name }}</span>
@@ -141,8 +142,23 @@
       </div>
       {% endfor %}
     </div>
-    {% else %}
-    <p style="color:var(--muted); margin:0;">{{ "Сначала создайте первую кастомную роль выше." if locale == "ru" else "Create a custom role above first." }}</p>
+
+    {% if custom_roles %}
+    <form id="assign-custom-role-form" autocomplete="off" style="display:flex; gap:10px; flex-wrap:wrap; align-items:flex-end;">
+      <div class="field-group" style="max-width:250px;">
+        <label>{{ "Никнейм пользователя" if locale == "ru" else "Username" }}</label>
+        <input type="text" name="custom_target_nick" autocomplete="new-password" data-lpignore="true" placeholder="{{ 'Ник (например Ikazych1)...' if locale == 'ru' else 'Username...' }}" required />
+      </div>
+      <div class="field-group" style="max-width:260px;">
+        <label>{{ "Выберите кастомную роль" if locale == "ru" else "Select Role" }}</label>
+        <select name="role_id">
+          {% for cr in custom_roles %}
+          <option value="{{ cr.id }}">{{ cr.name }} ({{ cr.avatar_frame }})</option>
+          {% endfor %}
+        </select>
+      </div>
+      <button class="btn btn-primary" type="submit">{{ "Надеть роль на профиль" if locale == "ru" else "Assign Role" }}</button>
+    </form>
     {% endif %}
   </div>
 </div>
@@ -219,6 +235,64 @@
 
 {% block scripts %}
 <script>
+const KIROKU_PALETTE = [
+  "#7c6bff", "#38bdf8", "#0ea5e9", "#22c55e", "#10b981",
+  "#fcd34d", "#f59e0b", "#fb923c", "#f43f5e", "#ec4899",
+  "#a855f7", "#eef2f9"
+];
+
+document.querySelectorAll("[data-picker-target]").forEach((row) => {
+  const target = row.dataset.pickerTarget;
+  const input = document.getElementById(`input-${target}`);
+  KIROKU_PALETTE.forEach((hex) => {
+    const sw = document.createElement("button");
+    sw.type = "button";
+    sw.className = "color-swatch" + (input.value.toLowerCase() === hex ? " active" : "");
+    sw.style.background = hex;
+    sw.title = hex;
+    sw.addEventListener("click", () => {
+      input.value = hex;
+      row.querySelectorAll(".color-swatch").forEach((b) => b.classList.remove("active"));
+      sw.classList.add("active");
+      updateRolePreview();
+    });
+    row.appendChild(sw);
+  });
+});
+
+function syncHexInput(target) {
+  const input = document.getElementById(`input-${target}`);
+  const row = document.querySelector(`[data-picker-target="${target}"]`);
+  if (row) {
+    row.querySelectorAll(".color-swatch").forEach((sw) => {
+      sw.classList.toggle("active", sw.title.toLowerCase() === input.value.trim().toLowerCase());
+    });
+  }
+  updateRolePreview();
+}
+
+function updateRolePreview() {
+  const rName = document.getElementById("crole-name-input").value.trim() || "VIP";
+  const frameType = document.getElementById("crole-frame-select").value;
+  const badgeColor = document.getElementById("input-badge_color").value.trim() || "#7c6bff";
+  const nickColor = document.getElementById("input-nick_color").value.trim() || "#fcd34d";
+  const frameColor = document.getElementById("input-frame_color").value.trim() || "#f59e0b";
+
+  const av = document.getElementById("preview-avatar");
+  const nk = document.getElementById("preview-nick");
+  const bg = document.getElementById("preview-badge");
+
+  av.className = `avatar-frame-wrap frame-${frameType}`;
+  av.style.border = frameType === "none" ? "none" : `2px solid ${frameColor}`;
+  av.style.setProperty("--frame-color", frameColor);
+
+  nk.style.color = nickColor;
+  bg.textContent = rName;
+  bg.style.background = `${badgeColor}22`;
+  bg.style.borderColor = badgeColor;
+  bg.style.color = badgeColor;
+}
+
 function switchAdminTab(name, btn) {
   document.querySelectorAll(".admin-tab").forEach((el) => el.style.display = "none");
   document.getElementById(`tab-${name}`).style.display = "block";
@@ -251,7 +325,7 @@ document.getElementById("grant-by-nick-form").addEventListener("submit", async (
     window.kirokuToast(data.detail || "Error");
     return;
   }
-  window.kirokuToast(`${data.username} -> ${data.role}`);
+  window.kirokuToast(`${data.username} -> ${data.role}${data.is_moderator ? " + moderator" : ""}`);
   setTimeout(() => location.reload(), 500);
 });
 
@@ -321,10 +395,13 @@ async function setUserRole(uid) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ role }),
   });
-  if (res.ok) {
-    window.kirokuToast("Role updated: " + role);
-    setTimeout(() => location.reload(), 400);
+  const data = await res.json();
+  if (!res.ok) {
+    window.kirokuToast(data.detail || "Error");
+    return;
   }
+  window.kirokuToast("Role updated");
+  setTimeout(() => location.reload(), 400);
 }
 
 async function deleteUser(uid) {

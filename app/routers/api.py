@@ -503,6 +503,25 @@ def api_admin_list_users(request: Request, db: Session = Depends(get_db)):
     }
 
 
+def _apply_system_role(target: User, requested_role: str, actor: User) -> None:
+    if requested_role == "moderator":
+        target.is_moderator = True
+        if target.role != "admin":
+            target.role = "moderator"
+        return
+    if requested_role == "admin":
+        target.role = "admin"
+        return
+    # requested_role == "user"
+    if target.id == actor.id:
+        if target.is_moderator:
+            target.is_moderator = False
+            return
+        raise HTTPException(status_code=400, detail="Cannot remove admin role from yourself")
+    target.role = "user"
+    target.is_moderator = False
+
+
 @router.post("/admin/users/by-username/role")
 def api_admin_set_role_by_username(
     payload: AdminUsernameRoleRequest,
@@ -513,11 +532,9 @@ def api_admin_set_role_by_username(
     target = db.scalar(select(User).where(func.lower(User.username) == payload.username.strip().lower()))
     if not target:
         raise HTTPException(status_code=404, detail=f"User '{payload.username}' not found")
-    if target.id == admin_user.id and payload.role != "admin":
-        raise HTTPException(status_code=400, detail="Cannot demote yourself")
-    target.role = payload.role
+    _apply_system_role(target, payload.role, admin_user)
     db.commit()
-    return {"id": target.id, "username": target.username, "role": target.role}
+    return {"id": target.id, "username": target.username, "role": target.role, "is_moderator": target.is_moderator}
 
 
 @router.post("/admin/users/{user_id}/role")
@@ -531,11 +548,9 @@ def api_admin_set_user_role(
     target = db.get(User, user_id)
     if not target:
         raise HTTPException(status_code=404, detail="User not found")
-    if target.id == admin_user.id and payload.role != "admin":
-        raise HTTPException(status_code=400, detail="Cannot demote yourself")
-    target.role = payload.role
+    _apply_system_role(target, payload.role, admin_user)
     db.commit()
-    return {"id": target.id, "username": target.username, "role": target.role}
+    return {"id": target.id, "username": target.username, "role": target.role, "is_moderator": target.is_moderator}
 
 
 @router.delete("/admin/users/{user_id}")

@@ -39,8 +39,6 @@ class Settings(BaseSettings):
     discord_client_secret: str = ""
     github_client_id: str = ""
     github_client_secret: str = ""
-    vk_client_id: str = ""
-    vk_client_secret: str = ""
     telegram_bot_username: str = ""
     telegram_bot_token: str = ""
 

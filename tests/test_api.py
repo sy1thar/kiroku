@@ -164,8 +164,10 @@ def test_trait_voting_and_wiki_revision_workflow(client: TestClient):
 def test_registration_login_and_personal_lists_with_covers(client: TestClient):
     reg_page = client.get("/ru/register")
     assert reg_page.status_code == 200
-    for provider_name in ("Google", "Apple", "Discord", "Telegram", "GitHub", "VK"):
+    for provider_name in ("Google", "Apple", "Discord", "Telegram", "GitHub"):
         assert provider_name in reg_page.text
+    assert "/auth/oauth/vk" not in reg_page.text
+    assert client.get("/auth/oauth/vk").status_code == 404
 
     assert client.get("/ru/login").status_code == 200
     oauth_unconfigured = client.get("/auth/oauth/google")

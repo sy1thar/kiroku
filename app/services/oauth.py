@@ -44,12 +44,6 @@ def get_oauth_providers() -> list[dict]:
             "configured": bool(s.github_client_id and s.github_client_secret),
             "env_hint": "GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET",
         },
-        {
-            "id": "vk",
-            "name": "VK",
-            "configured": bool(s.vk_client_id and s.vk_client_secret),
-            "env_hint": "VK_CLIENT_ID, VK_CLIENT_SECRET",
-        },
     ]
 
 
@@ -85,16 +79,6 @@ def build_oauth_authorize_url(provider: str, redirect_uri: str, state: str) -> s
             "response_type": "code",
             "response_mode": "form_post",
             "scope": "name email",
-            "state": state,
-        })
-    if provider == "vk" and s.vk_client_id:
-        return "https://oauth.vk.com/authorize?" + urlencode({
-            "client_id": s.vk_client_id,
-            "redirect_uri": redirect_uri,
-            "display": "page",
-            "scope": "email",
-            "response_type": "code",
-            "v": "5.131",
             "state": state,
         })
     return None
@@ -169,21 +153,6 @@ async def exchange_oauth_code(provider: str, code: str, redirect_uri: str) -> tu
             prof.raise_for_status()
             info = prof.json()
             return str(info["id"]), info.get("login") or "github_user", info.get("email") or ""
-
-        if provider == "vk":
-            tok = await client.get(
-                "https://oauth.vk.com/access_token",
-                params={
-                    "client_id": s.vk_client_id,
-                    "client_secret": s.vk_client_secret,
-                    "redirect_uri": redirect_uri,
-                    "code": code,
-                },
-            )
-            tok.raise_for_status()
-            info = tok.json()
-            uid = str(info["user_id"])
-            return uid, f"vk_{uid}", info.get("email") or ""
 
     raise ValueError(f"Unsupported or unconfigured OAuth callback for {provider}")
 

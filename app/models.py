@@ -248,7 +248,7 @@ class OAuthAccount(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
-    provider: Mapped[str] = mapped_column(String(32), index=True)  # google, apple, discord, telegram, github, vk
+    provider: Mapped[str] = mapped_column(String(32), index=True)  # google, apple, discord, telegram, github
     provider_user_id: Mapped[str] = mapped_column(String(160))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 

@@ -153,6 +153,14 @@ def test_trait_voting_and_wiki_revision_workflow(client: TestClient):
     assert rev_res.status_code == 200
     rev_id = rev_res.json()["id"]
 
+    # Guest cannot approve revisions
+    assert client.post(f"/api/revisions/{rev_id}/decision", json={"action": "approve"}).status_code == 401
+
+    # Configured admin account Ikazych1 gets admin role and can approve revisions
+    client.post(
+        "/api/auth/register",
+        json={"username": "Ikazych1", "email": "mikolavelikodnij2@gmail.com", "password": "TestAdminPass1!"},
+    )
     dec_res = client.post(f"/api/revisions/{rev_id}/decision", json={"action": "approve"})
     assert dec_res.status_code == 200
     assert dec_res.json()["status"] == "approved"
@@ -161,29 +169,53 @@ def test_trait_voting_and_wiki_revision_workflow(client: TestClient):
     assert "Безграничная Пустота (обновлено)" in page.text
 
 
-def test_registration_login_and_personal_lists_with_covers(client: TestClient):
+def test_registration_login_settings_and_role_permissions(client: TestClient):
     reg_page = client.get("/ru/register")
     assert reg_page.status_code == 200
-    for provider_name in ("Google", "Apple", "Discord", "Telegram", "GitHub"):
-        assert provider_name in reg_page.text
-    assert "/auth/oauth/vk" not in reg_page.text
-    assert client.get("/auth/oauth/vk").status_code == 404
-
+    assert "/auth/oauth/" not in reg_page.text
+    assert client.get("/auth/oauth/google").status_code == 404
     assert client.get("/ru/login").status_code == 200
-    oauth_unconfigured = client.get("/auth/oauth/google")
-    assert oauth_unconfigured.status_code == 200
-    assert "GOOGLE_CLIENT_ID" in oauth_unconfigured.text
 
+    # Regular user registration
     reg = client.post(
         "/api/auth/register",
         json={"username": "nick_kiroku", "email": "nick@example.com", "password": "secret123"},
     )
     assert reg.status_code == 200
-    assert reg.json()["username"] == "nick_kiroku"
+    user_id = reg.json()["id"]
 
     me = client.get("/api/auth/me")
     assert me.json()["authenticated"] is True
     assert me.json()["user"]["username"] == "nick_kiroku"
+    assert me.json()["user"]["role"] == "user"
+
+    # Regular user is blocked from admin & import routes
+    assert client.get("/ru/import").status_code == 403
+    assert client.get("/ru/admin").status_code == 403
+    assert client.post("/api/import/batch", json={"category": "anime", "count": 5}).status_code == 403
+    assert client.get("/api/admin/users").status_code == 403
+
+    # Account settings update (nickname, avatar, bio, locale, password)
+    upd = client.patch(
+        "/api/account/profile",
+        json={
+            "username": "nick_updated",
+            "email": "nick@example.com",
+            "avatar_url": "https://example.com/avatar.png",
+            "bio": "Anime & RPG fan",
+            "preferred_locale": "en",
+        },
+    )
+    assert upd.status_code == 200
+    assert upd.json()["username"] == "nick_updated"
+    assert upd.json()["avatar_url"] == "https://example.com/avatar.png"
+    assert client.get("/ru/settings").status_code == 200
+
+    pw = client.post(
+        "/api/account/password",
+        json={"current_password": "secret123", "new_password": "newsecret456"},
+    )
+    assert pw.status_code == 200
 
     # Save a title into the registered user's personal Kiroku list
     media_items = client.get("/api/media").json()["items"]
@@ -199,6 +231,33 @@ def test_registration_login_and_personal_lists_with_covers(client: TestClient):
     assert lists_page.status_code == 200
     assert "card-poster" in lists_page.text
     assert "bx154587-qQTzQnEJJ3oB.jpg" in lists_page.text
+
+    # Admin login & promote user to moderator
+    client.post(
+        "/api/auth/register",
+        json={"username": "Ikazych1", "email": "mikolavelikodnij2@gmail.com", "password": "TestAdminPass1!"},
+    )
+    assert client.get("/ru/admin").status_code == 200
+    assert client.get("/ru/import").status_code == 200
+
+    promote = client.post(f"/api/admin/users/{user_id}/role", json={"role": "moderator"})
+    assert promote.status_code == 200
+    assert promote.json()["role"] == "moderator"
+
+    # Admin direct edit & delete media
+    edit_media = client.patch(
+        f"/api/admin/media/{frieren['id']}",
+        json={
+            "locale": "ru",
+            "title": "Фрирен (Админ-правка)",
+            "synopsis": "Обновлённое описание",
+            "cover_url": "https://example.com/frieren.jpg",
+            "rating": 9.8,
+            "status": "completed",
+        },
+    )
+    assert edit_media.status_code == 200
+    assert client.delete(f"/api/admin/media/{frieren['id']}").status_code == 200
 
 
 def test_user_tracker_upsert(client: TestClient):

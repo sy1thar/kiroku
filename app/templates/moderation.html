@@ -30,7 +30,7 @@
     <div style="font-size:0.82rem; color:var(--muted); margin-bottom:10px;">{{ rev.reason }}</div>
     {% endif %}
 
-    {% if rev.status == "pending" %}
+    {% if rev.status == "pending" and can_moderate %}
     <div style="display:flex; gap:10px;">
       <button class="btn btn-primary btn-sm" onclick="decideRevision({{ rev.id }}, 'approve')">{{ ui.approve }}</button>
       <button class="btn btn-secondary btn-sm" onclick="decideRevision({{ rev.id }}, 'reject')">{{ ui.reject }}</button>

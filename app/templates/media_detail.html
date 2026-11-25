@@ -176,6 +176,63 @@
         <button class="btn btn-secondary" type="submit">{{ ui.propose_btn }}</button>
       </form>
     </div>
+
+    {% if current_user and current_user.role == 'admin' %}
+    <div class="panel" style="border-color:rgba(245,158,11,0.45);">
+      <h3 style="color:#fcd34d;">{{ "Админ-управление" if locale == "ru" else "Admin Controls" }}</h3>
+      <form id="admin-media-edit-form" style="display:grid; gap:10px;">
+        <div class="field-group">
+          <label>{{ "Название" if locale == "ru" else "Title" }} ({{ locale.upper() }})</label>
+          <input type="text" name="title" value="{{ tr.title if tr else media.canonical_title }}" required />
+        </div>
+        <div class="field-group">
+          <label>{{ "Обложка URL" if locale == "ru" else "Cover URL" }}</label>
+          <input type="text" name="cover_url" value="{{ media.cover_url }}" />
+        </div>
+        <div class="field-group">
+          <label>{{ "Рейтинг (0–10)" if locale == "ru" else "Rating (0–10)" }}</label>
+          <input type="number" step="0.1" min="0" max="10" name="rating" value="{{ media.rating }}" />
+        </div>
+        <div class="field-group">
+          <label>{{ ui.synopsis }}</label>
+          <textarea name="synopsis" rows="3">{{ tr.synopsis if tr else '' }}</textarea>
+        </div>
+        <div style="display:flex; gap:10px; flex-wrap:wrap;">
+          <button class="btn btn-primary btn-sm" type="submit">{{ "Сохранить напрямую" if locale == "ru" else "Save Directly" }}</button>
+          <button class="btn btn-secondary btn-sm" type="button" style="color:#fda4af;" onclick="adminDeleteMedia({{ media.id }})">{{ "Удалить тайтл" if locale == "ru" else "Delete Title" }}</button>
+        </div>
+      </form>
+    </div>
+    {% endif %}
   </section>
 </div>
+{% endblock %}
+
+{% block scripts %}
+{% if current_user and current_user.role == 'admin' %}
+<script>
+document.getElementById("admin-media-edit-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const fd = new FormData(e.target);
+  const res = await fetch("/api/admin/media/{{ media.id }}", {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      locale: "{{ locale }}",
+      title: fd.get("title"),
+      cover_url: fd.get("cover_url") || "",
+      rating: Number(fd.get("rating") || 0),
+      status: "{{ media.status }}",
+      synopsis: fd.get("synopsis") || "",
+    }),
+  });
+  if (res.ok) location.reload();
+});
+async function adminDeleteMedia(id) {
+  if (!confirm("Delete this title?")) return;
+  const res = await fetch(`/api/admin/media/${id}`, { method: "DELETE" });
+  if (res.ok) window.location.href = "/{{ locale }}/catalog";
+}
+</script>
+{% endif %}
 {% endblock %}

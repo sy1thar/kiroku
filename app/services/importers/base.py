@@ -222,6 +222,7 @@ async def upsert_character_from_external(
     image_url: str = "",
     bio_en: str = "",
     name_ru: str = "",
+    translate_bio: bool = True,
     popularity: int = 0,
     media_id: int | None = None,
     role: str = "supporting",
@@ -281,7 +282,10 @@ async def upsert_character_from_external(
     if not resolved_name_ru:
         resolved_name_ru, _ = await translate_text(canonical_name, "ru")
 
-    ru_bio, ru_source = await translate_text(clean_bio, "ru")
+    if translate_bio and clean_bio:
+        ru_bio, ru_source = await translate_text(clean_bio, "ru")
+    else:
+        ru_bio, ru_source = clean_bio, "api_raw"
     _ensure_char_translation(
         db,
         character.id,

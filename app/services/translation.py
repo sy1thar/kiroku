@@ -27,7 +27,7 @@ async def fetch_shikimori_ru(
     """
     endpoint_kind = "animes" if kind == "animes" else "mangas"
     try:
-        async with httpx.AsyncClient(timeout=8.0, follow_redirects=True, headers=_SHIKI_HEADERS) as client:
+        async with httpx.AsyncClient(timeout=4.5, follow_redirects=True, headers=_SHIKI_HEADERS) as client:
             item: dict | None = None
             if mal_id:
                 resp = await client.get(f"https://shikimori.io/api/{endpoint_kind}/{mal_id}")
@@ -54,7 +54,7 @@ async def fetch_shikimori_character_ru(name: str) -> str:
     if not name.strip():
         return ""
     try:
-        async with httpx.AsyncClient(timeout=8.0, follow_redirects=True, headers=_SHIKI_HEADERS) as client:
+        async with httpx.AsyncClient(timeout=4.5, follow_redirects=True, headers=_SHIKI_HEADERS) as client:
             resp = await client.get(
                 "https://shikimori.io/api/characters/search",
                 params={"search": name},
@@ -134,7 +134,7 @@ async def translate_text(text: str, target_locale: str) -> tuple[str, str]:
     # Free GTX translation fallback so localized UI always receives translated titles/descriptions
     try:
         snippet = text[:2800]
-        async with httpx.AsyncClient(timeout=10.0) as client:
+        async with httpx.AsyncClient(timeout=4.5) as client:
             resp = await client.get(
                 "https://translate.googleapis.com/translate_a/single",
                 params={

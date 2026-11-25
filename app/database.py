@@ -1,5 +1,5 @@
 from collections.abc import Generator
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 from app.config import get_settings
@@ -42,3 +42,21 @@ def init_db() -> None:
     from app import models  # noqa: F401
 
     Base.metadata.create_all(bind=engine)
+    _ensure_user_columns()
+
+
+def _ensure_user_columns() -> None:
+    """Add profile columns to existing users tables without requiring manual migrations."""
+    inspector = inspect(engine)
+    if "users" not in inspector.get_table_names():
+        return
+    existing_cols = {col["name"] for col in inspector.get_columns("users")}
+    alterations = {
+        "avatar_url": "TEXT DEFAULT ''",
+        "bio": "TEXT DEFAULT ''",
+        "preferred_locale": "VARCHAR(10) DEFAULT 'ru'",
+    }
+    with engine.begin() as conn:
+        for col_name, col_def in alterations.items():
+            if col_name not in existing_cols:
+                conn.execute(text(f"ALTER TABLE users ADD COLUMN {col_name} {col_def}"))

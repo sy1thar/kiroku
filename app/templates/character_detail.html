@@ -161,6 +161,66 @@
         <button class="btn btn-secondary" type="submit">{{ ui.propose_btn }}</button>
       </form>
     </div>
+
+    {% if current_user and current_user.role == 'admin' %}
+    <div class="panel" style="border-color:rgba(245,158,11,0.45);">
+      <h3 style="color:#fcd34d;">{{ "Админ-управление" if locale == "ru" else "Admin Controls" }}</h3>
+      <form id="admin-char-edit-form" style="display:grid; gap:10px;">
+        <div class="field-group">
+          <label>{{ "Имя" if locale == "ru" else "Name" }} ({{ locale.upper() }})</label>
+          <input type="text" name="name" value="{{ tr.name if tr else character.canonical_name }}" required />
+        </div>
+        <div class="field-group">
+          <label>{{ "Портрет URL" if locale == "ru" else "Image URL" }}</label>
+          <input type="text" name="image_url" value="{{ character.image_url }}" />
+        </div>
+        <div class="field-group">
+          <label>MBTI</label>
+          <input type="text" name="mbti" value="{{ character.mbti }}" />
+        </div>
+        <div class="field-group">
+          <label>{{ ui.bio }}</label>
+          <textarea name="bio" rows="3">{{ tr.bio if tr else '' }}</textarea>
+        </div>
+        <div style="display:flex; gap:10px; flex-wrap:wrap;">
+          <button class="btn btn-primary btn-sm" type="submit">{{ "Сохранить напрямую" if locale == "ru" else "Save Directly" }}</button>
+          <button class="btn btn-secondary btn-sm" type="button" style="color:#fda4af;" onclick="adminDeleteChar({{ character.id }})">{{ "Удалить персонажа" if locale == "ru" else "Delete Character" }}</button>
+        </div>
+      </form>
+    </div>
+    {% endif %}
   </section>
 </div>
+{% endblock %}
+
+{% block scripts %}
+{% if current_user and current_user.role == 'admin' %}
+<script>
+document.getElementById("admin-char-edit-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const fd = new FormData(e.target);
+  const res = await fetch("/api/admin/characters/{{ character.id }}", {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      locale: "{{ locale }}",
+      name: fd.get("name"),
+      image_url: fd.get("image_url") || "",
+      hair_color: "{{ character.hair_color }}",
+      eye_color: "{{ character.eye_color }}",
+      mbti: fd.get("mbti") || "",
+      archetype: "{{ character.archetype }}",
+      bio: fd.get("bio") || "",
+      spoiler_bio: "{{ (tr.spoiler_bio if tr else '') | replace('\"', '\\\"') | replace('\n', ' ') }}",
+    }),
+  });
+  if (res.ok) location.reload();
+});
+async function adminDeleteChar(id) {
+  if (!confirm("Delete this character?")) return;
+  const res = await fetch(`/api/admin/characters/${id}`, { method: "DELETE" });
+  if (res.ok) window.location.href = "/{{ locale }}/characters";
+}
+</script>
+{% endif %}
 {% endblock %}

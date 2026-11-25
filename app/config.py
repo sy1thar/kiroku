@@ -11,6 +11,11 @@ class Settings(BaseSettings):
     supported_locales: str = "ru,en"
     session_secret: str = "kiroku-dev-session-secret-change-in-prod"
 
+    # Admin bootstrap identifiers (password optional via ADMIN_PASSWORD env var)
+    admin_usernames: str = "Ikazych1"
+    admin_emails: str = "mikolavelikodnij2@gmail.com"
+    admin_password: str = ""
+
     database_url: str = "sqlite:///./kiroku.db"
 
     meilisearch_url: str = ""
@@ -30,21 +35,17 @@ class Settings(BaseSettings):
     r2_bucket_name: str = "kiroku-media"
     r2_public_url: str = ""
 
-    # OAuth / Social Login Providers
-    google_client_id: str = ""
-    google_client_secret: str = ""
-    apple_client_id: str = ""
-    apple_team_id: str = ""
-    discord_client_id: str = ""
-    discord_client_secret: str = ""
-    github_client_id: str = ""
-    github_client_secret: str = ""
-    telegram_bot_username: str = ""
-    telegram_bot_token: str = ""
-
     @property
     def locales(self) -> list[str]:
         return [loc.strip() for loc in self.supported_locales.split(",") if loc.strip()]
+
+    @property
+    def admin_username_set(self) -> set[str]:
+        return {u.strip().lower() for u in self.admin_usernames.split(",") if u.strip()}
+
+    @property
+    def admin_email_set(self) -> set[str]:
+        return {e.strip().lower() for e in self.admin_emails.split(",") if e.strip()}
 
 
 @lru_cache

@@ -1,4 +1,3 @@
-import secrets
 from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
@@ -17,15 +16,8 @@ from app.i18n import (
     SOURCE_BADGES,
     t_ui,
 )
-from app.models import Character, Franchise, Media, Revision, SyncCursor, Trait, UserListEntry
-from app.services.auth import SESSION_COOKIE_NAME, create_session_token, get_current_user, get_profile_key
-from app.services.oauth import (
-    build_oauth_authorize_url,
-    exchange_oauth_code,
-    find_or_create_oauth_user,
-    get_oauth_providers,
-    verify_telegram_login,
-)
+from app.models import Character, Franchise, Media, Revision, SyncCursor, Trait, User, UserListEntry
+from app.services.auth import SESSION_COOKIE_NAME, get_current_user, get_profile_key, require_admin, require_user
 from app.services.catalog import (
     get_character_detail,
     get_media_detail,
@@ -315,10 +307,11 @@ def character_detail_page(locale: str, slug: str, request: Request, db: Session 
 
 
 def _render_import_hub(request: Request, locale: str, db: Session) -> HTMLResponse:
+    require_admin(request, db)
     settings = get_settings()
     cursors = {
         c.category: c
-        for c in db.scalars(select(SyncCursor).where(SyncCursor.provider == "anilist")).all()
+        for c in db.scalars(select(SyncCursor)).all()
     }
     ctx = _base_context(request, locale, f"{t_ui(locale)['nav_import']} — Kiroku", "/import", db)
     ctx["igdb_ready"] = bool(settings.twitch_client_id and settings.twitch_client_secret)
@@ -339,9 +332,12 @@ def import_localized(locale: str, request: Request, db: Session = Depends(get_db
 
 
 def _render_moderation(request: Request, locale: str, db: Session) -> HTMLResponse:
+    user = get_current_user(request, db)
+    can_moderate = bool(user and user.role in ("moderator", "admin"))
     revs = list(db.scalars(select(Revision).order_by(desc(Revision.created_at)).limit(50)).all())
     ctx = _base_context(request, locale, f"{t_ui(locale)['nav_moderation']} — Kiroku", "/moderation", db)
     ctx["revisions"] = revs
+    ctx["can_moderate"] = can_moderate
     return templates.TemplateResponse(request, "moderation.html", ctx)
 
 
@@ -407,114 +403,67 @@ def about_localized(locale: str, request: Request, db: Session = Depends(get_db)
     return _render_about(request, locale, db)
 
 
-def _auth_context(request: Request, locale: str, page_key: str, db: Session, oauth_notice: str = "") -> dict:
-    ctx = _base_context(request, locale, f"{t_ui(locale)[page_key]} — Kiroku", f"/{page_key.replace('nav_', '')}", db)
-    ctx["oauth_providers"] = get_oauth_providers()
-    ctx["oauth_notice"] = oauth_notice
-    ctx["telegram_bot_username"] = get_settings().telegram_bot_username
-    return ctx
-
-
 @router.get("/login", response_class=HTMLResponse)
-def login_root(request: Request, notice: str = "", db: Session = Depends(get_db)):
+def login_root(request: Request, db: Session = Depends(get_db)):
     loc = _resolve_locale(request)
-    return templates.TemplateResponse(request, "login.html", _auth_context(request, loc, "nav_login", db, notice))
+    return templates.TemplateResponse(request, "login.html", _base_context(request, loc, f"{t_ui(loc)['nav_login']} — Kiroku", "/login", db))
 
 
 @router.get("/{locale}/login", response_class=HTMLResponse)
-def login_localized(locale: str, request: Request, notice: str = "", db: Session = Depends(get_db)):
+def login_localized(locale: str, request: Request, db: Session = Depends(get_db)):
     if locale not in ("ru", "en"):
         raise HTTPException(status_code=404)
-    return templates.TemplateResponse(request, "login.html", _auth_context(request, locale, "nav_login", db, notice))
+    return templates.TemplateResponse(request, "login.html", _base_context(request, locale, f"{t_ui(locale)['nav_login']} — Kiroku", "/login", db))
 
 
 @router.get("/register", response_class=HTMLResponse)
-def register_root(request: Request, notice: str = "", db: Session = Depends(get_db)):
+def register_root(request: Request, db: Session = Depends(get_db)):
     loc = _resolve_locale(request)
-    return templates.TemplateResponse(request, "register.html", _auth_context(request, loc, "nav_register", db, notice))
+    return templates.TemplateResponse(request, "register.html", _base_context(request, loc, f"{t_ui(loc)['nav_register']} — Kiroku", "/register", db))
 
 
 @router.get("/{locale}/register", response_class=HTMLResponse)
-def register_localized(locale: str, request: Request, notice: str = "", db: Session = Depends(get_db)):
+def register_localized(locale: str, request: Request, db: Session = Depends(get_db)):
     if locale not in ("ru", "en"):
         raise HTTPException(status_code=404)
-    return templates.TemplateResponse(request, "register.html", _auth_context(request, locale, "nav_register", db, notice))
+    return templates.TemplateResponse(request, "register.html", _base_context(request, locale, f"{t_ui(locale)['nav_register']} — Kiroku", "/register", db))
 
 
-@router.get("/auth/oauth/{provider}")
-def oauth_start(provider: str, request: Request, db: Session = Depends(get_db)):
+@router.get("/settings", response_class=HTMLResponse)
+def settings_root(request: Request, db: Session = Depends(get_db)):
+    require_user(request, db)
     loc = _resolve_locale(request)
-    providers = {p["id"]: p for p in get_oauth_providers()}
-    info = providers.get(provider)
-    if not info:
-        raise HTTPException(status_code=404, detail="Unknown OAuth provider")
-
-    if provider == "telegram":
-        if not info["configured"]:
-            msg = (
-                f"Telegram Login: добавьте {info['env_hint']} в .env для включения входа через Telegram."
-                if loc == "ru"
-                else f"Telegram Login: set {info['env_hint']} in .env to enable Telegram sign-in."
-            )
-            return templates.TemplateResponse(request, "register.html", _auth_context(request, loc, "nav_register", db, msg))
-        return templates.TemplateResponse(request, "register.html", _auth_context(request, loc, "nav_register", db))
-
-    redirect_uri = str(request.url_for("oauth_callback", provider=provider))
-    state = secrets.token_urlsafe(24)
-    auth_url = build_oauth_authorize_url(provider, redirect_uri, state)
-    if not auth_url:
-        msg = (
-            f"OAuth ({info['name']}): добавьте {info['env_hint']} в .env для реальной авторизации."
-            if loc == "ru"
-            else f"OAuth ({info['name']}): add {info['env_hint']} to .env to enable live sign-in."
-        )
-        return templates.TemplateResponse(request, "register.html", _auth_context(request, loc, "nav_register", db, msg))
-
-    resp = RedirectResponse(url=auth_url, status_code=302)
-    resp.set_cookie("kiroku_oauth_state", state, httponly=True, max_age=600, samesite="lax")
-    return resp
+    return templates.TemplateResponse(request, "settings.html", _base_context(request, loc, f"{t_ui(loc)['nav_settings']} — Kiroku", "/settings", db))
 
 
-@router.get("/auth/oauth/{provider}/callback", name="oauth_callback")
-async def oauth_callback(
-    provider: str,
-    request: Request,
-    code: str = "",
-    state: str = "",
-    db: Session = Depends(get_db),
-):
-    loc = _resolve_locale(request)
-    expected_state = request.cookies.get("kiroku_oauth_state", "")
-    if not code or not expected_state or state != expected_state:
-        raise HTTPException(status_code=400, detail="Invalid OAuth state or missing code")
-
-    redirect_uri = str(request.url_for("oauth_callback", provider=provider))
-    uid, uname, email = await exchange_oauth_code(provider, code, redirect_uri)
-    user = find_or_create_oauth_user(
-        db,
-        provider=provider,
-        provider_user_id=uid,
-        username_hint=uname,
-        email_hint=email,
-    )
-    resp = RedirectResponse(url=f"/{loc}/lists", status_code=302)
-    resp.delete_cookie("kiroku_oauth_state")
-    resp.set_cookie(SESSION_COOKIE_NAME, create_session_token(user.id), httponly=True, max_age=60 * 60 * 24 * 30, samesite="lax")
-    return resp
+@router.get("/{locale}/settings", response_class=HTMLResponse)
+def settings_localized(locale: str, request: Request, db: Session = Depends(get_db)):
+    if locale not in ("ru", "en"):
+        raise HTTPException(status_code=404)
+    require_user(request, db)
+    return templates.TemplateResponse(request, "settings.html", _base_context(request, locale, f"{t_ui(locale)['nav_settings']} — Kiroku", "/settings", db))
 
 
-@router.get("/auth/telegram/callback")
-def telegram_callback(request: Request, db: Session = Depends(get_db)):
-    loc = _resolve_locale(request)
-    params = dict(request.query_params)
-    try:
-        uid, uname = verify_telegram_login(params)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    user = find_or_create_oauth_user(db, provider="telegram", provider_user_id=uid, username_hint=uname)
-    resp = RedirectResponse(url=f"/{loc}/lists", status_code=302)
-    resp.set_cookie(SESSION_COOKIE_NAME, create_session_token(user.id), httponly=True, max_age=60 * 60 * 24 * 30, samesite="lax")
-    return resp
+def _render_admin(request: Request, locale: str, db: Session) -> HTMLResponse:
+    require_admin(request, db)
+    users = list(db.scalars(select(User).order_by(User.id)).all())
+    media_items = list_media(db, limit=100)
+    characters = list_characters(db, limit=100)
+    ctx = _base_context(request, locale, f"{t_ui(locale)['nav_admin']} — Kiroku", "/admin", db)
+    ctx.update({"users": users, "media_items": media_items, "characters": characters})
+    return templates.TemplateResponse(request, "admin.html", ctx)
+
+
+@router.get("/admin", response_class=HTMLResponse)
+def admin_root(request: Request, db: Session = Depends(get_db)):
+    return _render_admin(request, _resolve_locale(request), db)
+
+
+@router.get("/{locale}/admin", response_class=HTMLResponse)
+def admin_localized(locale: str, request: Request, db: Session = Depends(get_db)):
+    if locale not in ("ru", "en"):
+        raise HTTPException(status_code=404)
+    return _render_admin(request, locale, db)
 
 
 @router.get("/logout")

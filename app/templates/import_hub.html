@@ -8,15 +8,20 @@
 </div>
 
 <div class="panel">
-  <h3 style="margin-top:0;">{{ "Пакетный импорт по 15 тайтлов (по страницам без повторов)" if locale == "ru" else "Continuous Batch Import (15 titles per step)" }}</h3>
+  <h3 style="margin-top:0;">{{ "Пакетный импорт по всем категориям (по 10 тайтлов без повторов)" if locale == "ru" else "Batch Import Across All Categories (10 titles per click)" }}</h3>
   <p style="color:var(--muted); font-size:0.9rem; margin-top:0;">
-    {{ "Каждый клик загружает следующие 15 самых популярных тайтлов и их персонажей с AniList, сохраняя курсор страницы в базе." if locale == "ru" else "Each click fetches the next 15 titles and characters from AniList while advancing the saved page cursor." }}
+    {{ "Доступно только администратору. Каждый клик загружает следующие 10 популярных тайтлов и персонажей, обновляя курсор страницы." if locale == "ru" else "Admin only. Each click fetches the next 10 titles and characters while advancing the saved cursor." }}
   </p>
   <div style="display:flex; flex-wrap:wrap; gap:10px;">
-    {% for cat_key, cat_label in [('anime', 'Аниме' if locale == 'ru' else 'Anime'), ('manga', 'Манга' if locale == 'ru' else 'Manga'), ('manhwa', 'Манхва' if locale == 'ru' else 'Manhwa')] %}
+    {% for cat_key, labels in media_type_labels.items() %}
     {% set cur = cursors.get(cat_key) %}
-    <button type="button" class="btn btn-primary" onclick="runBatchImport('{{ cat_key }}', 15)">
-      +15 {{ cat_label }} ({{ "стр." if locale == "ru" else "page" }} {{ cur.next_page if cur else 1 }})
+    <button
+      type="button"
+      class="btn btn-primary batch-btn"
+      data-cat="{{ cat_key }}"
+      onclick="runBatchImport(this, '{{ cat_key }}', 10)"
+    >
+      +10 {{ labels[locale] }} (<span class="cur-page">{{ "стр." if locale == "ru" else "p." }} {{ cur.next_page if cur else 1 }}</span>)
     </button>
     {% endfor %}
   </div>
@@ -28,7 +33,7 @@
     <div class="field-group">
       <label>{{ "Источник API" if locale == "ru" else "API Provider" }}</label>
       <select name="provider">
-        <option value="anilist">AniList GraphQL (Anime, Manga, Manhwa, Novels)</option>
+        <option value="anilist">AniList GraphQL (Anime, Manga, Manhwa, Manhua, Novels)</option>
         <option value="vndb">VNDB Kana v2 (Visual Novels)</option>
         <option value="igdb">IGDB / Twitch (Video Games {% if not igdb_ready %}— needs keys{% endif %})</option>
       </select>
@@ -68,21 +73,37 @@ function renderImportedBox(data) {
   box.innerHTML = html;
 }
 
-async function runBatchImport(category, count) {
+async function runBatchImport(btn, category, count) {
   const box = document.getElementById("import-results");
   box.style.display = "block";
-  box.innerHTML = "{{ 'Пакетная загрузка из AniList...' if locale == 'ru' else 'Batch importing from AniList...' }}";
-  const res = await fetch("/api/import/batch", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ category, count }),
-  });
-  const data = await res.json();
-  if (!res.ok) {
-    box.innerHTML = `<div style="color:#fda4af;">Error: ${data.detail || "Batch import failed"}</div>`;
-    return;
+  box.innerHTML = "{{ 'Загрузка пакета из API (это займёт пару секунд)...' if locale == 'ru' else 'Importing batch from API...' }}";
+  const allBtns = document.querySelectorAll(".batch-btn");
+  allBtns.forEach((b) => b.disabled = true);
+
+  try {
+    const res = await fetch("/api/import/batch", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ category, count }),
+    });
+    const text = await res.text();
+    let data = {};
+    try { data = JSON.parse(text); } catch { data = { detail: text.slice(0, 200) }; }
+
+    if (!res.ok) {
+      box.innerHTML = `<div style="color:#fda4af;">Error (${res.status}): ${data.detail || "Batch import failed"}</div>`;
+      return;
+    }
+    const pageSpan = btn.querySelector(".cur-page");
+    if (pageSpan && data.next_page) {
+      pageSpan.textContent = `{{ "стр." if locale == "ru" else "p." }} ${data.next_page}`;
+    }
+    renderImportedBox(data);
+  } catch (err) {
+    box.innerHTML = `<div style="color:#fda4af;">Network error: ${err}</div>`;
+  } finally {
+    allBtns.forEach((b) => b.disabled = false);
   }
-  renderImportedBox(data);
 }
 
 document.getElementById("live-import-form").addEventListener("submit", async (e) => {

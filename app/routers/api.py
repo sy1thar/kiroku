@@ -5,11 +5,16 @@ from sqlalchemy import desc, select
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.models import Revision
+from app.models import Character, CharacterTranslation, Media, MediaTranslation, Revision, User
 from app.schemas import (
+    AccountProfileUpdateRequest,
+    AdminCharacterUpdateRequest,
+    AdminMediaUpdateRequest,
+    AdminRoleUpdateRequest,
     BatchImportRequest,
     ImportQueryRequest,
     LoginRequest,
+    PasswordChangeRequest,
     RegisterRequest,
     RevisionCreateRequest,
     RevisionDecisionRequest,
@@ -19,10 +24,15 @@ from app.schemas import (
 from app.services.auth import (
     SESSION_COOKIE_NAME,
     authenticate_user,
+    change_user_password,
     create_session_token,
     get_current_user,
     get_profile_key,
     register_user,
+    require_admin,
+    require_moderator_or_admin,
+    require_user,
+    update_user_profile,
 )
 from app.services.catalog import (
     create_revision,
@@ -34,7 +44,8 @@ from app.services.catalog import (
     upsert_user_list,
     vote_character_trait,
 )
-from app.services.importers.anilist import import_batch_from_anilist, import_from_anilist
+from app.services.importers.anilist import import_from_anilist
+from app.services.importers.batch import run_batch_import
 from app.services.importers.igdb import IGDBNotConfiguredError, import_from_igdb
 from app.services.importers.vndb import import_from_vndb
 from app.services.search import global_search
@@ -180,8 +191,65 @@ def api_me(request: Request, db: Session = Depends(get_db)):
         return {"authenticated": False, "user": None}
     return {
         "authenticated": True,
-        "user": {"id": user.id, "username": user.username, "email": user.email, "role": user.role},
+        "user": {
+            "id": user.id,
+            "username": user.username,
+            "email": user.email,
+            "role": user.role,
+            "avatar_url": user.avatar_url,
+            "bio": user.bio,
+            "preferred_locale": user.preferred_locale,
+        },
     }
+
+
+@router.patch("/account/profile")
+def api_update_profile(
+    payload: AccountProfileUpdateRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    user = require_user(request, db)
+    try:
+        updated = update_user_profile(
+            db,
+            user,
+            username=payload.username,
+            email=payload.email,
+            avatar_url=payload.avatar_url,
+            bio=payload.bio,
+            preferred_locale=payload.preferred_locale,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {
+        "id": updated.id,
+        "username": updated.username,
+        "email": updated.email,
+        "avatar_url": updated.avatar_url,
+        "bio": updated.bio,
+        "preferred_locale": updated.preferred_locale,
+        "role": updated.role,
+    }
+
+
+@router.post("/account/password")
+def api_change_password(
+    payload: PasswordChangeRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    user = require_user(request, db)
+    try:
+        change_user_password(
+            db,
+            user,
+            current_password=payload.current_password,
+            new_password=payload.new_password,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"status": "password_updated"}
 
 
 @router.post("/traits/vote")
@@ -257,8 +325,10 @@ def api_create_revision(payload: RevisionCreateRequest, request: Request, db: Se
 def api_decide_revision(
     revision_id: int,
     payload: RevisionDecisionRequest,
+    request: Request,
     db: Session = Depends(get_db),
 ):
+    require_moderator_or_admin(request, db)
     try:
         rev = decide_revision(db, revision_id, payload.action)
     except ValueError as exc:
@@ -291,20 +361,28 @@ def api_upsert_list(payload: UserListUpsertRequest, request: Request, db: Sessio
 
 
 @router.post("/import/batch")
-async def api_import_batch(payload: BatchImportRequest, db: Session = Depends(get_db)):
+async def api_import_batch(
+    payload: BatchImportRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    require_admin(request, db)
     try:
-        result = await import_batch_from_anilist(
-            db,
-            category=payload.category,
-            per_page=payload.count,
-        )
+        result = await run_batch_import(db, category=payload.category, count=payload.count)
     except httpx.HTTPError as exc:
         raise HTTPException(status_code=502, detail=f"Upstream API error: {exc}") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return result
 
 
 @router.post("/import")
-async def api_import_external(payload: ImportQueryRequest, db: Session = Depends(get_db)):
+async def api_import_external(
+    payload: ImportQueryRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    require_admin(request, db)
     try:
         if payload.provider == "anilist":
             items = await import_from_anilist(
@@ -325,3 +403,140 @@ async def api_import_external(payload: ImportQueryRequest, db: Session = Depends
         raise HTTPException(status_code=502, detail=f"Upstream API error: {exc}") from exc
 
     return {"provider": payload.provider, "imported_count": len(items), "items": items}
+
+
+# --- Admin Endpoints (Admin Only) ---
+
+
+@router.get("/admin/users")
+def api_admin_list_users(request: Request, db: Session = Depends(get_db)):
+    require_admin(request, db)
+    users = list(db.scalars(select(User).order_by(User.id)).all())
+    return {
+        "items": [
+            {
+                "id": u.id,
+                "username": u.username,
+                "email": u.email,
+                "role": u.role,
+                "avatar_url": u.avatar_url,
+            }
+            for u in users
+        ]
+    }
+
+
+@router.post("/admin/users/{user_id}/role")
+def api_admin_set_user_role(
+    user_id: int,
+    payload: AdminRoleUpdateRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    admin_user = require_admin(request, db)
+    target = db.get(User, user_id)
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found")
+    if target.id == admin_user.id and payload.role != "admin":
+        raise HTTPException(status_code=400, detail="Cannot demote yourself")
+    target.role = payload.role
+    db.commit()
+    return {"id": target.id, "username": target.username, "role": target.role}
+
+
+@router.delete("/admin/users/{user_id}")
+def api_admin_delete_user(user_id: int, request: Request, db: Session = Depends(get_db)):
+    admin_user = require_admin(request, db)
+    target = db.get(User, user_id)
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found")
+    if target.id == admin_user.id:
+        raise HTTPException(status_code=400, detail="Cannot delete yourself")
+    db.delete(target)
+    db.commit()
+    return {"deleted": user_id}
+
+
+@router.patch("/admin/media/{media_id}")
+def api_admin_update_media(
+    media_id: int,
+    payload: AdminMediaUpdateRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    require_admin(request, db)
+    media = db.get(Media, media_id)
+    if not media:
+        raise HTTPException(status_code=404, detail="Media not found")
+    media.cover_url = payload.cover_url.strip()
+    media.rating = payload.rating
+    media.status = payload.status
+    tr = db.scalar(
+        select(MediaTranslation).where(
+            MediaTranslation.media_id == media.id,
+            MediaTranslation.locale == payload.locale,
+        )
+    )
+    if not tr:
+        tr = MediaTranslation(media_id=media.id, locale=payload.locale, title=payload.title)
+        db.add(tr)
+    tr.title = payload.title.strip()
+    tr.synopsis = payload.synopsis.strip()
+    tr.source = "community_verified"
+    db.commit()
+    return {"id": media.id, "slug": media.slug, "status": "updated"}
+
+
+@router.delete("/admin/media/{media_id}")
+def api_admin_delete_media(media_id: int, request: Request, db: Session = Depends(get_db)):
+    require_admin(request, db)
+    media = db.get(Media, media_id)
+    if not media:
+        raise HTTPException(status_code=404, detail="Media not found")
+    db.delete(media)
+    db.commit()
+    return {"deleted": media_id}
+
+
+@router.patch("/admin/characters/{character_id}")
+def api_admin_update_character(
+    character_id: int,
+    payload: AdminCharacterUpdateRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    require_admin(request, db)
+    ch = db.get(Character, character_id)
+    if not ch:
+        raise HTTPException(status_code=404, detail="Character not found")
+    ch.image_url = payload.image_url.strip()
+    ch.hair_color = payload.hair_color
+    ch.eye_color = payload.eye_color
+    ch.mbti = payload.mbti.upper().strip()
+    ch.archetype = payload.archetype.strip()
+    tr = db.scalar(
+        select(CharacterTranslation).where(
+            CharacterTranslation.character_id == ch.id,
+            CharacterTranslation.locale == payload.locale,
+        )
+    )
+    if not tr:
+        tr = CharacterTranslation(character_id=ch.id, locale=payload.locale, name=payload.name)
+        db.add(tr)
+    tr.name = payload.name.strip()
+    tr.bio = payload.bio.strip()
+    tr.spoiler_bio = payload.spoiler_bio.strip()
+    tr.source = "community_verified"
+    db.commit()
+    return {"id": ch.id, "slug": ch.slug, "status": "updated"}
+
+
+@router.delete("/admin/characters/{character_id}")
+def api_admin_delete_character(character_id: int, request: Request, db: Session = Depends(get_db)):
+    require_admin(request, db)
+    ch = db.get(Character, character_id)
+    if not ch:
+        raise HTTPException(status_code=404, detail="Character not found")
+    db.delete(ch)
+    db.commit()
+    return {"deleted": character_id}

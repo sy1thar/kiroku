@@ -1,6 +1,7 @@
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
+from app.config import get_settings
 from app.models import (
     Character,
     CharacterTrait,
@@ -11,8 +12,10 @@ from app.models import (
     MediaCharacter,
     MediaTranslation,
     Trait,
+    User,
     UserListEntry,
 )
+from app.services.auth import hash_password
 
 
 SEED_MEDIA_COVERS: dict[str, str] = {
@@ -59,8 +62,48 @@ def backfill_seed_images(db: Session) -> None:
         db.commit()
 
 
+def ensure_admin_account(db: Session) -> None:
+    """Promote configured admin accounts to 'admin' and optionally create from ADMIN_PASSWORD env."""
+    settings = get_settings()
+    changed = False
+    for user in db.scalars(
+        select(User).where(
+            or_(
+                func.lower(User.username).in_(settings.admin_username_set),
+                func.lower(User.email).in_(settings.admin_email_set),
+            )
+        )
+    ).all():
+        if user.role != "admin":
+            user.role = "admin"
+            changed = True
+
+    if settings.admin_password and settings.admin_username_set and settings.admin_email_set:
+        uname = next(iter(settings.admin_usernames.split(","))).strip() or "Ikazych1"
+        uemail = next(iter(settings.admin_emails.split(","))).strip().lower()
+        existing = db.scalar(
+            select(User).where(
+                or_(func.lower(User.username) == uname.lower(), func.lower(User.email) == uemail)
+            )
+        )
+        if not existing:
+            db.add(
+                User(
+                    username=uname,
+                    email=uemail,
+                    password_hash=hash_password(settings.admin_password),
+                    role="admin",
+                )
+            )
+            changed = True
+
+    if changed:
+        db.commit()
+
+
 def seed_if_empty(db: Session) -> None:
     """Populate initial cross-media universe (Anime, Manhwa, Games, Visual Novels) if DB is empty."""
+    ensure_admin_account(db)
     existing_count = db.scalar(select(func.count(Media.id))) or 0
     if existing_count > 0:
         backfill_seed_images(db)

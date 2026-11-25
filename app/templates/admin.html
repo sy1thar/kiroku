@@ -1,0 +1,105 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="section-head" style="margin-top:0;">
+  <h2>{{ ui.nav_admin }} · {{ current_user.username }}</h2>
+  <div style="display:flex; gap:8px;">
+    <a class="btn btn-primary btn-sm" href="/{{ locale }}/import">{{ ui.nav_import }}</a>
+    <a class="btn btn-secondary btn-sm" href="/{{ locale }}/moderation">{{ ui.nav_moderation }}</a>
+  </div>
+</div>
+
+<div class="panel">
+  <h3>{{ "Пользователи и назначение модераторов" if locale == "ru" else "Users & Role Management" }} ({{ users|length }})</h3>
+  <div style="display:grid; gap:10px;">
+    {% for u in users %}
+    <div style="display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; padding:10px 12px; border:1px solid var(--border); border-radius:10px; background:var(--bg-soft);">
+      <div>
+        <strong>{{ u.username }}</strong>
+        <span style="color:var(--muted); font-size:0.85rem;">· {{ u.email }}</span>
+        <span class="badge" style="margin-left:6px;">{{ u.role }}</span>
+      </div>
+      <div style="display:flex; align-items:center; gap:8px;">
+        {% if u.id != current_user.id %}
+        <select id="role-{{ u.id }}" style="padding:6px 10px; border-radius:8px; background:var(--card); color:var(--text); border:1px solid var(--border-strong);">
+          <option value="user" {% if u.role == "user" %}selected{% endif %}>user</option>
+          <option value="moderator" {% if u.role == "moderator" %}selected{% endif %}>moderator</option>
+          <option value="admin" {% if u.role == "admin" %}selected{% endif %}>admin</option>
+        </select>
+        <button class="btn btn-primary btn-sm" onclick="setUserRole({{ u.id }})">{{ "Назначить" if locale == "ru" else "Save Role" }}</button>
+        <button class="btn btn-secondary btn-sm" style="color:#fda4af;" onclick="deleteUser({{ u.id }})">{{ "Удалить" if locale == "ru" else "Delete" }}</button>
+        {% else %}
+        <span class="badge" style="color:#fcd34d;">{{ "Вы (Главный админ)" if locale == "ru" else "You (Admin)" }}</span>
+        {% endif %}
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+
+<div class="panel">
+  <h3>{{ "Управление тайтлами" if locale == "ru" else "Manage Media" }} ({{ media_items|length }})</h3>
+  <div style="display:grid; gap:8px; max-height:420px; overflow-y:auto;">
+    {% for m in media_items %}
+    {% set tr = pick_media_tr(m) %}
+    <div id="admin-media-{{ m.id }}" style="display:flex; align-items:center; justify-content:space-between; gap:12px; padding:8px 12px; border:1px solid var(--border); border-radius:9px;">
+      <div>
+        <a href="/{{ locale }}/media/{{ m.slug }}" style="font-weight:600;">{{ tr.title if tr else m.canonical_title }}</a>
+        <span class="badge badge-{{ m.media_type }}" style="margin-left:6px;">{{ m.media_type }}</span>
+      </div>
+      <button class="btn btn-secondary btn-sm" style="color:#fda4af;" onclick="deleteMedia({{ m.id }})">{{ "Удалить" if locale == "ru" else "Delete" }}</button>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+
+<div class="panel">
+  <h3>{{ "Управление персонажами" if locale == "ru" else "Manage Characters" }} ({{ characters|length }})</h3>
+  <div style="display:grid; gap:8px; max-height:420px; overflow-y:auto;">
+    {% for c in characters %}
+    {% set ctr = pick_char_tr(c) %}
+    <div id="admin-char-{{ c.id }}" style="display:flex; align-items:center; justify-content:space-between; gap:12px; padding:8px 12px; border:1px solid var(--border); border-radius:9px;">
+      <div>
+        <a href="/{{ locale }}/characters/{{ c.slug }}" style="font-weight:600;">{{ ctr.name if ctr else c.canonical_name }}</a>
+        <span style="color:var(--muted); font-size:0.82rem;">· {{ c.canonical_name }}</span>
+      </div>
+      <button class="btn btn-secondary btn-sm" style="color:#fda4af;" onclick="deleteCharacter({{ c.id }})">{{ "Удалить" if locale == "ru" else "Delete" }}</button>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+async function setUserRole(uid) {
+  const role = document.getElementById(`role-${uid}`).value;
+  const res = await fetch(`/api/admin/users/${uid}/role`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ role }),
+  });
+  if (res.ok) {
+    window.kirokuToast("Role updated: " + role);
+    setTimeout(() => location.reload(), 400);
+  }
+}
+
+async function deleteUser(uid) {
+  if (!confirm("Delete this user?")) return;
+  const res = await fetch(`/api/admin/users/${uid}`, { method: "DELETE" });
+  if (res.ok) location.reload();
+}
+
+async function deleteMedia(mid) {
+  if (!confirm("Delete this title?")) return;
+  const res = await fetch(`/api/admin/media/${mid}`, { method: "DELETE" });
+  if (res.ok) document.getElementById(`admin-media-${mid}`)?.remove();
+}
+
+async function deleteCharacter(cid) {
+  if (!confirm("Delete this character?")) return;
+  const res = await fetch(`/api/admin/characters/${cid}`, { method: "DELETE" });
+  if (res.ok) document.getElementById(`admin-char-${cid}`)?.remove();
+}
+</script>
+{% endblock %}

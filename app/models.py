@@ -238,18 +238,10 @@ class User(Base):
     username: Mapped[str] = mapped_column(String(60), unique=True, index=True)
     email: Mapped[str] = mapped_column(String(160), unique=True, index=True)
     password_hash: Mapped[str] = mapped_column(String(255))
-    role: Mapped[str] = mapped_column(String(24), default="user")  # user | moderator
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-
-
-class OAuthAccount(Base):
-    __tablename__ = "oauth_accounts"
-    __table_args__ = (UniqueConstraint("provider", "provider_user_id", name="uq_oauth_provider_uid"),)
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
-    provider: Mapped[str] = mapped_column(String(32), index=True)  # google, apple, discord, telegram, github
-    provider_user_id: Mapped[str] = mapped_column(String(160))
+    role: Mapped[str] = mapped_column(String(24), default="user")  # user | moderator | admin
+    avatar_url: Mapped[str] = mapped_column(Text, default="")
+    bio: Mapped[str] = mapped_column(Text, default="")
+    preferred_locale: Mapped[str] = mapped_column(String(10), default="ru")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 

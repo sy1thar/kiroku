@@ -429,9 +429,23 @@ def register_localized(locale: str, request: Request, db: Session = Depends(get_
     return templates.TemplateResponse(request, "register.html", _base_context(request, locale, f"{t_ui(locale)['nav_register']} — Kiroku", "/register", db))
 
 
+@router.get("/profile", response_class=HTMLResponse)
+def profile_root(request: Request, db: Session = Depends(get_db)):
+    require_user(request, db)
+    loc = _resolve_locale(request)
+    return templates.TemplateResponse(request, "profile.html", _base_context(request, loc, f"{t_ui(loc)['nav_profile']} — Kiroku", "/profile", db))
+
+
+@router.get("/{locale}/profile", response_class=HTMLResponse)
+def profile_localized(locale: str, request: Request, db: Session = Depends(get_db)):
+    if locale not in ("ru", "en"):
+        raise HTTPException(status_code=404)
+    require_user(request, db)
+    return templates.TemplateResponse(request, "profile.html", _base_context(request, locale, f"{t_ui(locale)['nav_profile']} — Kiroku", "/profile", db))
+
+
 @router.get("/settings", response_class=HTMLResponse)
 def settings_root(request: Request, db: Session = Depends(get_db)):
-    require_user(request, db)
     loc = _resolve_locale(request)
     return templates.TemplateResponse(request, "settings.html", _base_context(request, loc, f"{t_ui(loc)['nav_settings']} — Kiroku", "/settings", db))
 
@@ -440,15 +454,14 @@ def settings_root(request: Request, db: Session = Depends(get_db)):
 def settings_localized(locale: str, request: Request, db: Session = Depends(get_db)):
     if locale not in ("ru", "en"):
         raise HTTPException(status_code=404)
-    require_user(request, db)
     return templates.TemplateResponse(request, "settings.html", _base_context(request, locale, f"{t_ui(locale)['nav_settings']} — Kiroku", "/settings", db))
 
 
 def _render_admin(request: Request, locale: str, db: Session) -> HTMLResponse:
     require_admin(request, db)
     users = list(db.scalars(select(User).order_by(User.id)).all())
-    media_items = list_media(db, limit=100)
-    characters = list_characters(db, limit=100)
+    media_items = list_media(db, limit=200)
+    characters = list_characters(db, limit=200)
     ctx = _base_context(request, locale, f"{t_ui(locale)['nav_admin']} — Kiroku", "/admin", db)
     ctx.update({"users": users, "media_items": media_items, "characters": characters})
     return templates.TemplateResponse(request, "admin.html", ctx)

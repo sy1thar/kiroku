@@ -2,6 +2,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
+from app.roles import USER_ROLES_TABLE
 from app.models import (
     Character,
     CharacterTrait,
@@ -63,19 +64,19 @@ def backfill_seed_images(db: Session) -> None:
 
 
 def ensure_admin_account(db: Session) -> None:
-    """Promote configured admin accounts to 'admin' and optionally create from ADMIN_PASSWORD env."""
+    """Apply USER_ROLES_TABLE + configured admin accounts and optionally create from ADMIN_PASSWORD."""
     settings = get_settings()
     changed = False
-    for user in db.scalars(
-        select(User).where(
-            or_(
-                func.lower(User.username).in_(settings.admin_username_set),
-                func.lower(User.email).in_(settings.admin_email_set),
-            )
-        )
-    ).all():
-        if user.role != "admin":
-            user.role = "admin"
+    roles_by_lower = {k.strip().lower(): v for k, v in USER_ROLES_TABLE.items() if k.strip()}
+
+    for user in db.scalars(select(User)).all():
+        uname_low = user.username.strip().lower()
+        email_low = user.email.strip().lower()
+        target_role: str | None = roles_by_lower.get(uname_low)
+        if uname_low in settings.admin_username_set or email_low in settings.admin_email_set:
+            target_role = "admin"
+        if target_role and user.role != target_role:
+            user.role = target_role
             changed = True
 
     if settings.admin_password and settings.admin_username_set and settings.admin_email_set:

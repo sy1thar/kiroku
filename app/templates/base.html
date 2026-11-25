@@ -52,7 +52,7 @@
 
       {% if current_user %}
       <div style="display:flex; align-items:center; gap:8px;">
-        <a class="badge" href="/{{ locale }}/settings" style="gap:7px; padding:4px 10px;">
+        <a class="badge" href="/{{ locale }}/profile" style="gap:7px; padding:4px 10px;" title="{{ ui.nav_profile }}">
           {% if current_user.avatar_url %}
           <img src="{{ current_user.avatar_url }}" alt="{{ current_user.username }}" style="width:20px; height:20px; border-radius:999px; object-fit:cover;" />
           {% endif %}
@@ -68,6 +68,7 @@
       </div>
       {% else %}
       <div style="display:flex; align-items:center; gap:6px;">
+        <a class="nav-link" href="/{{ locale }}/settings">{{ ui.nav_settings }}</a>
         <a class="nav-link" href="/{{ locale }}/login">{{ ui.nav_login }}</a>
         <a class="btn btn-primary btn-sm" href="/{{ locale }}/register">{{ ui.nav_register }}</a>
       </div>

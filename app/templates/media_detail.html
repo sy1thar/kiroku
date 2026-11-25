@@ -199,9 +199,11 @@
         </div>
         <div style="display:flex; gap:10px; flex-wrap:wrap;">
           <button class="btn btn-primary btn-sm" type="submit">{{ "Сохранить напрямую" if locale == "ru" else "Save Directly" }}</button>
+          <button class="btn btn-secondary btn-sm" type="button" onclick="adminImportMoreChars(this, {{ media.id }})">{{ "Догрузить персонажей из API (+12)" if locale == "ru" else "Batch Import Characters (+12)" }}</button>
           <button class="btn btn-secondary btn-sm" type="button" style="color:#fda4af;" onclick="adminDeleteMedia({{ media.id }})">{{ "Удалить тайтл" if locale == "ru" else "Delete Title" }}</button>
         </div>
       </form>
+      <div id="admin-char-import-msg" style="margin-top:10px; font-size:0.86rem; color:var(--muted);"></div>
     </div>
     {% endif %}
   </section>
@@ -228,6 +230,29 @@ document.getElementById("admin-media-edit-form").addEventListener("submit", asyn
   });
   if (res.ok) location.reload();
 });
+async function adminImportMoreChars(btn, mediaId) {
+  btn.disabled = true;
+  const msg = document.getElementById("admin-char-import-msg");
+  msg.textContent = "{{ 'Загрузка персонажей из API...' if locale == 'ru' else 'Importing characters...' }}";
+  try {
+    const res = await fetch(`/api/admin/media/${mediaId}/import-characters`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ count: 12 }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      msg.style.color = "#fda4af";
+      msg.textContent = data.detail || "Import failed";
+      return;
+    }
+    msg.style.color = "#6ee7b7";
+    msg.textContent = `+${data.added_count}`;
+    setTimeout(() => location.reload(), 600);
+  } finally {
+    btn.disabled = false;
+  }
+}
 async function adminDeleteMedia(id) {
   if (!confirm("Delete this title?")) return;
   const res = await fetch(`/api/admin/media/${id}`, { method: "DELETE" });

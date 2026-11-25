@@ -117,10 +117,19 @@
     });
   });
 
-  // Anti-Spoiler Toggle
+  // Apply saved site display preferences
+  if (localStorage.getItem("kiroku_compact_cards") === "1") {
+    document.body.classList.add("compact-cards");
+  }
+
+  // Anti-Spoiler Toggle + Auto-Reveal preference
   const spoilerBtn = document.getElementById("spoiler-toggle-btn");
   const spoilerBody = document.getElementById("spoiler-body");
   if (spoilerBtn && spoilerBody) {
+    if (localStorage.getItem("kiroku_auto_reveal_spoilers") === "1") {
+      spoilerBody.classList.remove("blurred");
+      spoilerBtn.textContent = spoilerBtn.dataset.hideText;
+    }
     spoilerBtn.addEventListener("click", () => {
       const hidden = spoilerBody.classList.toggle("blurred");
       spoilerBtn.textContent = hidden ? spoilerBtn.dataset.showText : spoilerBtn.dataset.hideText;

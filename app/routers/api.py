@@ -1,16 +1,19 @@
+import asyncio
 import uuid
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 import httpx
-from sqlalchemy import desc, select
-from sqlalchemy.orm import Session
+from sqlalchemy import desc, func, select
+from sqlalchemy.orm import Session, selectinload
 
 from app.database import get_db
 from app.models import Character, CharacterTranslation, Media, MediaTranslation, Revision, User
 from app.schemas import (
     AccountProfileUpdateRequest,
     AdminCharacterUpdateRequest,
+    AdminImportCharactersRequest,
     AdminMediaUpdateRequest,
     AdminRoleUpdateRequest,
+    AdminUsernameRoleRequest,
     BatchImportRequest,
     ImportQueryRequest,
     LoginRequest,
@@ -44,11 +47,17 @@ from app.services.catalog import (
     upsert_user_list,
     vote_character_trait,
 )
-from app.services.importers.anilist import import_from_anilist
+from app.services.importers.anilist import import_from_anilist, import_more_characters_for_media
 from app.services.importers.batch import run_batch_import
 from app.services.importers.igdb import IGDBNotConfiguredError, import_from_igdb
 from app.services.importers.vndb import import_from_vndb
 from app.services.search import global_search
+from app.services.translation import (
+    _has_cyrillic,
+    fetch_shikimori_character_ru,
+    fetch_shikimori_ru,
+    translate_text,
+)
 
 router = APIRouter(prefix="/api", tags=["api"])
 
@@ -529,6 +538,98 @@ def api_admin_update_character(
     tr.source = "community_verified"
     db.commit()
     return {"id": ch.id, "slug": ch.slug, "status": "updated"}
+
+
+@router.post("/admin/users/by-username/role")
+def api_admin_set_role_by_username(
+    payload: AdminUsernameRoleRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    admin_user = require_admin(request, db)
+    target = db.scalar(select(User).where(func.lower(User.username) == payload.username.strip().lower()))
+    if not target:
+        raise HTTPException(status_code=404, detail=f"User '{payload.username}' not found")
+    if target.id == admin_user.id and payload.role != "admin":
+        raise HTTPException(status_code=400, detail="Cannot demote yourself")
+    target.role = payload.role
+    db.commit()
+    return {"id": target.id, "username": target.username, "role": target.role}
+
+
+@router.post("/admin/media/{media_id}/import-characters")
+async def api_admin_import_media_characters(
+    media_id: int,
+    payload: AdminImportCharactersRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    require_admin(request, db)
+    try:
+        res = await import_more_characters_for_media(db, media_id, count=payload.count)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail=f"Upstream API error: {exc}") from exc
+    return res
+
+
+@router.post("/admin/translate-missing")
+async def api_admin_translate_missing(request: Request, db: Session = Depends(get_db)):
+    """Localize up to 15 untranslated titles/descriptions & 30 characters per click to Russian."""
+    require_admin(request, db)
+    fixed_media = 0
+    fixed_chars = 0
+
+    media_rows = db.scalars(select(Media).options(selectinload(Media.translations))).all()
+    for m in media_rows:
+        if fixed_media >= 15:
+            break
+        if m.slug in ("elden-ring-game", "persona-5-royal-game"):
+            continue
+        ru_tr = next((t for t in m.translations if t.locale == "ru"), None)
+        en_tr = next((t for t in m.translations if t.locale == "en"), None)
+        if not ru_tr:
+            continue
+        needs_title = not _has_cyrillic(ru_tr.title)
+        needs_syn = bool(en_tr and en_tr.synopsis and not _has_cyrillic(ru_tr.synopsis))
+        if not needs_title and not needs_syn:
+            continue
+
+        kind = "animes" if m.media_type == "anime" else "mangas"
+        ru_title, ru_desc = await fetch_shikimori_ru(kind=kind, search_title=m.canonical_title)
+        if needs_title:
+            if not ru_title:
+                ru_title, _ = await translate_text(m.canonical_title, "ru")
+            if ru_title and _has_cyrillic(ru_title):
+                ru_tr.title = ru_title
+        if needs_syn:
+            if ru_desc and _has_cyrillic(ru_desc):
+                ru_tr.synopsis = ru_desc
+                ru_tr.source = "community_verified"
+            elif en_tr and en_tr.synopsis:
+                tr_syn, src = await translate_text(en_tr.synopsis, "ru")
+                if tr_syn and _has_cyrillic(tr_syn):
+                    ru_tr.synopsis = tr_syn
+                    ru_tr.source = src
+        fixed_media += 1
+
+    char_rows = db.scalars(select(Character).options(selectinload(Character.translations))).all()
+    for c in char_rows:
+        if fixed_chars >= 30:
+            break
+        ru_tr = next((t for t in c.translations if t.locale == "ru"), None)
+        if not ru_tr or _has_cyrillic(ru_tr.name):
+            continue
+        rn = await fetch_shikimori_character_ru(c.canonical_name)
+        if not rn:
+            rn, _ = await translate_text(c.canonical_name, "ru")
+        if rn and _has_cyrillic(rn):
+            ru_tr.name = rn
+            fixed_chars += 1
+
+    db.commit()
+    return {"translated_media": fixed_media, "translated_characters": fixed_chars}
 
 
 @router.delete("/admin/characters/{character_id}")

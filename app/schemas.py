@@ -69,6 +69,15 @@ class AdminRoleUpdateRequest(BaseModel):
     role: str = Field(pattern="^(user|moderator|admin)$")
 
 
+class AdminUsernameRoleRequest(BaseModel):
+    username: str = Field(min_length=2, max_length=60)
+    role: str = Field(pattern="^(user|moderator|admin)$")
+
+
+class AdminImportCharactersRequest(BaseModel):
+    count: int = Field(ge=1, le=20, default=12)
+
+
 class AdminMediaUpdateRequest(BaseModel):
     locale: str = Field(pattern="^(ru|en)$", default="ru")
     title: str = Field(min_length=1, max_length=255)

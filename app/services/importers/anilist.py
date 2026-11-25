@@ -460,3 +460,184 @@ async def import_batch_from_anilist(
         "imported_count": len(imported),
         "items": imported,
     }
+
+
+ANILIST_MEDIA_CHARACTERS_QUERY = """
+query ($id: Int, $page: Int, $perPage: Int) {
+  Media(id: $id) {
+    id
+    characters(page: $page, perPage: $perPage, sort: [ROLE, FAVOURITES_DESC]) {
+      pageInfo {
+        hasNextPage
+      }
+      edges {
+        role
+        voiceActors(language: JAPANESE, sort: FAVOURITES_DESC) {
+          name { full }
+        }
+        node {
+          id
+          siteUrl
+          name { full native }
+          gender
+          description(asHtml: false)
+          favourites
+          image { large }
+        }
+      }
+    }
+  }
+}
+"""
+
+
+async def import_more_characters_for_media(db: Session, media_id: int, count: int = 12) -> dict:
+    """Batch-import additional unlinked characters directly into an existing media title (Admin)."""
+    from app.models import ExternalMapping, Media, MediaCharacter
+
+    media = db.get(Media, media_id)
+    if not media:
+        raise ValueError("Media not found")
+
+    mapping = db.scalar(
+        select(ExternalMapping).where(
+            ExternalMapping.entity_type == "media",
+            ExternalMapping.entity_id == media.id,
+        )
+    )
+    if not mapping:
+        raise ValueError("This title has no external API mapping yet.")
+
+    existing_char_ids = set(
+        db.scalars(select(MediaCharacter.character_id).where(MediaCharacter.media_id == media.id)).all()
+    )
+
+    if mapping.provider == "anilist":
+        settings = get_settings()
+        new_edges: list[dict] = []
+        page = 1
+        has_next = True
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            while len(new_edges) < count and has_next and page <= 4:
+                resp = await client.post(
+                    settings.anilist_api_url,
+                    json={
+                        "query": ANILIST_MEDIA_CHARACTERS_QUERY,
+                        "variables": {"id": int(mapping.external_id), "page": page, "perPage": 25},
+                    },
+                    headers={"Accept": "application/json", "Content-Type": "application/json"},
+                )
+                resp.raise_for_status()
+                media_node = (resp.json().get("data") or {}).get("Media") or {}
+                char_conn = media_node.get("characters") or {}
+                has_next = bool((char_conn.get("pageInfo") or {}).get("hasNextPage"))
+                for edge in char_conn.get("edges") or []:
+                    node = edge.get("node") or {}
+                    ext_cid = str(node.get("id") or "")
+                    if not ext_cid:
+                        continue
+                    ext_map = db.scalar(
+                        select(ExternalMapping).where(
+                            ExternalMapping.entity_type == "character",
+                            ExternalMapping.provider == "anilist",
+                            ExternalMapping.external_id == ext_cid,
+                        )
+                    )
+                    if ext_map and ext_map.entity_id in existing_char_ids:
+                        continue
+                    new_edges.append(edge)
+                    if len(new_edges) >= count:
+                        break
+                page += 1
+
+        sem = asyncio.Semaphore(3)
+
+        async def _res_name(n: str) -> str:
+            async with sem:
+                rn = await fetch_shikimori_character_ru(n)
+                if not rn:
+                    rn, _ = await translate_text(n, "ru")
+                return rn or n
+
+        raw_names = [((e.get("node") or {}).get("name") or {}).get("full", "") for e in new_edges]
+        ru_names = await asyncio.gather(*[_res_name(n) for n in raw_names])
+
+        added: list[dict] = []
+        for edge, ru_name in zip(new_edges, ru_names):
+            node = edge.get("node") or {}
+            cname = (node.get("name") or {}).get("full") or "Unknown"
+            va_list = edge.get("voiceActors") or []
+            va_name = (va_list[0].get("name") or {}).get("full", "") if va_list else ""
+            raw_role = (edge.get("role") or "SUPPORTING").lower()
+            role = "main" if raw_role == "main" else "supporting"
+
+            ch = await upsert_character_from_external(
+                db,
+                provider="anilist",
+                external_id=str(node["id"]),
+                external_url=node.get("siteUrl") or "",
+                canonical_name=cname,
+                native_name=(node.get("name") or {}).get("native") or "",
+                gender=(node.get("gender") or "unknown").lower(),
+                image_url=(node.get("image") or {}).get("large") or "",
+                bio_en=node.get("description") or "",
+                name_ru=ru_name,
+                translate_bio=False,
+                popularity=node.get("favourites") or 0,
+                media_id=media.id,
+                role=role,
+                voice_actor=va_name,
+            )
+            added.append({"id": ch.id, "slug": ch.slug, "name": ru_name})
+
+        db.commit()
+        return {"media_id": media.id, "added_count": len(added), "characters": added}
+
+    if mapping.provider == "vndb":
+        settings = get_settings()
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            cr = await client.post(
+                f"{settings.vndb_api_url}/character",
+                json={
+                    "filters": ["vn", "=", ["id", "=", mapping.external_id]],
+                    "fields": "id, name, original, description, image.url, sex",
+                    "results": 25,
+                },
+            )
+            cr.raise_for_status()
+            rows = cr.json().get("results") or []
+
+        added = []
+        for ch_data in rows:
+            if len(added) >= count:
+                break
+            ext_map = db.scalar(
+                select(ExternalMapping).where(
+                    ExternalMapping.entity_type == "character",
+                    ExternalMapping.provider == "vndb",
+                    ExternalMapping.external_id == ch_data["id"],
+                )
+            )
+            if ext_map and ext_map.entity_id in existing_char_ids:
+                continue
+            sex_raw = ch_data.get("sex")
+            gender = {"m": "male", "f": "female"}.get(sex_raw[0], "unknown") if sex_raw else "unknown"
+            ch = await upsert_character_from_external(
+                db,
+                provider="vndb",
+                external_id=ch_data["id"],
+                external_url=f"https://vndb.org/{ch_data['id']}",
+                canonical_name=ch_data.get("name") or "Unknown",
+                native_name=ch_data.get("original") or "",
+                gender=gender,
+                image_url=(ch_data.get("image") or {}).get("url") or "",
+                bio_en=ch_data.get("description") or "",
+                translate_bio=False,
+                media_id=media.id,
+                role="supporting",
+            )
+            added.append({"id": ch.id, "slug": ch.slug, "name": ch.canonical_name})
+        db.commit()
+        return {"media_id": media.id, "added_count": len(added), "characters": added}
+
+    raise ValueError(f"Per-title character batch import is currently supported for AniList and VNDB (got {mapping.provider}).")

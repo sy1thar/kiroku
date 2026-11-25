@@ -2,75 +2,179 @@
 {% block content %}
 <div class="section-head" style="margin-top:0;">
   <h2>{{ ui.nav_admin }} · {{ current_user.username }}</h2>
-  <div style="display:flex; gap:8px;">
+  <div style="display:flex; gap:8px; flex-wrap:wrap;">
     <a class="btn btn-primary btn-sm" href="/{{ locale }}/import">{{ ui.nav_import }}</a>
     <a class="btn btn-secondary btn-sm" href="/{{ locale }}/moderation">{{ ui.nav_moderation }}</a>
   </div>
 </div>
 
-<div class="panel">
-  <h3>{{ "Пользователи и назначение модераторов" if locale == "ru" else "Users & Role Management" }} ({{ users|length }})</h3>
-  <div style="display:grid; gap:10px;">
-    {% for u in users %}
-    <div style="display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; padding:10px 12px; border:1px solid var(--border); border-radius:10px; background:var(--bg-soft);">
-      <div>
-        <strong>{{ u.username }}</strong>
-        <span style="color:var(--muted); font-size:0.85rem;">· {{ u.email }}</span>
-        <span class="badge" style="margin-left:6px;">{{ u.role }}</span>
+<div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:18px;">
+  <button class="btn btn-primary btn-sm admin-tab-btn" onclick="switchAdminTab('users', this)">{{ "Пользователи и роли" if locale == "ru" else "Users & Roles" }} ({{ users|length }})</button>
+  <button class="btn btn-secondary btn-sm admin-tab-btn" onclick="switchAdminTab('media', this)">{{ "Тайтлы" if locale == "ru" else "Titles" }} ({{ media_items|length }})</button>
+  <button class="btn btn-secondary btn-sm admin-tab-btn" onclick="switchAdminTab('chars', this)">{{ "Персонажи" if locale == "ru" else "Characters" }} ({{ characters|length }})</button>
+  <button class="btn btn-secondary btn-sm admin-tab-btn" onclick="switchAdminTab('tools', this)">{{ "Инструменты" if locale == "ru" else "Tools" }}</button>
+</div>
+
+<div id="tab-users" class="admin-tab">
+  <div class="panel">
+    <h3>{{ "Выдать роль или модерку по нику" if locale == "ru" else "Assign Role by Username" }}</h3>
+    <form id="grant-by-nick-form" style="display:flex; gap:10px; flex-wrap:wrap; align-items:flex-end;">
+      <div class="field-group" style="max-width:260px;">
+        <label>{{ "Никнейм пользователя" if locale == "ru" else "Username" }}</label>
+        <input type="text" name="username" placeholder="Nickname..." required />
       </div>
-      <div style="display:flex; align-items:center; gap:8px;">
-        {% if u.id != current_user.id %}
-        <select id="role-{{ u.id }}" style="padding:6px 10px; border-radius:8px; background:var(--card); color:var(--text); border:1px solid var(--border-strong);">
-          <option value="user" {% if u.role == "user" %}selected{% endif %}>user</option>
-          <option value="moderator" {% if u.role == "moderator" %}selected{% endif %}>moderator</option>
-          <option value="admin" {% if u.role == "admin" %}selected{% endif %}>admin</option>
+      <div class="field-group" style="max-width:200px;">
+        <label>{{ "Роль" if locale == "ru" else "Role" }}</label>
+        <select name="role">
+          <option value="moderator">moderator</option>
+          <option value="admin">admin</option>
+          <option value="user">user</option>
         </select>
-        <button class="btn btn-primary btn-sm" onclick="setUserRole({{ u.id }})">{{ "Назначить" if locale == "ru" else "Save Role" }}</button>
-        <button class="btn btn-secondary btn-sm" style="color:#fda4af;" onclick="deleteUser({{ u.id }})">{{ "Удалить" if locale == "ru" else "Delete" }}</button>
-        {% else %}
-        <span class="badge" style="color:#fcd34d;">{{ "Вы (Главный админ)" if locale == "ru" else "You (Admin)" }}</span>
-        {% endif %}
       </div>
+      <button class="btn btn-primary" type="submit">{{ "Выдать роль" if locale == "ru" else "Assign Role" }}</button>
+    </form>
+  </div>
+
+  <div class="panel">
+    <h3>{{ "Список пользователей" if locale == "ru" else "Registered Users" }}</h3>
+    <div class="field-group" style="margin-bottom:12px;">
+      <input type="search" placeholder="{{ 'Поиск пользователя...' if locale == 'ru' else 'Filter users...' }}" oninput="filterRows('user-row', this.value)" />
     </div>
-    {% endfor %}
+    <div style="display:grid; gap:8px;">
+      {% for u in users %}
+      <div class="user-row" data-search="{{ (u.username ~ ' ' ~ u.email ~ ' ' ~ u.role)|lower }}" style="display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; padding:10px 12px; border:1px solid var(--border); border-radius:10px; background:var(--bg-soft);">
+        <div>
+          <strong>{{ u.username }}</strong>
+          <span style="color:var(--muted); font-size:0.85rem;">· {{ u.email }}</span>
+          <span class="badge" style="margin-left:6px;">{{ u.role }}</span>
+        </div>
+        <div style="display:flex; align-items:center; gap:8px;">
+          {% if u.id != current_user.id %}
+          <select id="role-{{ u.id }}" style="padding:6px 10px; border-radius:8px; background:var(--card); color:var(--text); border:1px solid var(--border-strong);">
+            <option value="user" {% if u.role == "user" %}selected{% endif %}>user</option>
+            <option value="moderator" {% if u.role == "moderator" %}selected{% endif %}>moderator</option>
+            <option value="admin" {% if u.role == "admin" %}selected{% endif %}>admin</option>
+          </select>
+          <button class="btn btn-primary btn-sm" onclick="setUserRole({{ u.id }})">{{ "Сохранить" if locale == "ru" else "Save" }}</button>
+          <button class="btn btn-secondary btn-sm" style="color:#fda4af;" onclick="deleteUser({{ u.id }})">{{ "Удалить" if locale == "ru" else "Delete" }}</button>
+          {% else %}
+          <span class="badge" style="color:#fcd34d;">{{ "Вы (Главный админ)" if locale == "ru" else "You (Admin)" }}</span>
+          {% endif %}
+        </div>
+      </div>
+      {% endfor %}
+    </div>
   </div>
 </div>
 
-<div class="panel">
-  <h3>{{ "Управление тайтлами" if locale == "ru" else "Manage Media" }} ({{ media_items|length }})</h3>
-  <div style="display:grid; gap:8px; max-height:420px; overflow-y:auto;">
-    {% for m in media_items %}
-    {% set tr = pick_media_tr(m) %}
-    <div id="admin-media-{{ m.id }}" style="display:flex; align-items:center; justify-content:space-between; gap:12px; padding:8px 12px; border:1px solid var(--border); border-radius:9px;">
-      <div>
-        <a href="/{{ locale }}/media/{{ m.slug }}" style="font-weight:600;">{{ tr.title if tr else m.canonical_title }}</a>
-        <span class="badge badge-{{ m.media_type }}" style="margin-left:6px;">{{ m.media_type }}</span>
-      </div>
-      <button class="btn btn-secondary btn-sm" style="color:#fda4af;" onclick="deleteMedia({{ m.id }})">{{ "Удалить" if locale == "ru" else "Delete" }}</button>
+<div id="tab-media" class="admin-tab" style="display:none;">
+  <div class="panel">
+    <div class="field-group" style="margin-bottom:12px;">
+      <input type="search" placeholder="{{ 'Поиск тайтла в админке...' if locale == 'ru' else 'Filter titles...' }}" oninput="filterRows('media-row', this.value)" />
     </div>
-    {% endfor %}
+    <div style="display:grid; gap:8px; max-height:540px; overflow-y:auto;">
+      {% for m in media_items %}
+      {% set tr = pick_media_tr(m) %}
+      {% set mtitle = tr.title if tr else m.canonical_title %}
+      <div id="admin-media-{{ m.id }}" class="media-row" data-search="{{ (mtitle ~ ' ' ~ m.canonical_title ~ ' ' ~ m.media_type)|lower }}" style="display:flex; align-items:center; justify-content:space-between; gap:12px; padding:8px 12px; border:1px solid var(--border); border-radius:9px;">
+        <div style="display:flex; align-items:center; gap:10px; min-width:0;">
+          {% if m.cover_url %}
+          <img src="{{ m.cover_url }}" alt="" style="width:34px; height:46px; object-fit:cover; border-radius:6px;" />
+          {% endif %}
+          <div style="min-width:0;">
+            <a href="/{{ locale }}/media/{{ m.slug }}" style="font-weight:600;">{{ mtitle }}</a>
+            <div style="font-size:0.78rem; color:var(--muted);">{{ m.canonical_title }} · <span class="badge badge-{{ m.media_type }}">{{ m.media_type }}</span></div>
+          </div>
+        </div>
+        <div style="display:flex; gap:8px;">
+          <a class="btn btn-secondary btn-sm" href="/{{ locale }}/media/{{ m.slug }}">{{ "Открыть" if locale == "ru" else "Open" }}</a>
+          <button class="btn btn-secondary btn-sm" style="color:#fda4af;" onclick="deleteMedia({{ m.id }})">{{ "Удалить" if locale == "ru" else "Delete" }}</button>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
   </div>
 </div>
 
-<div class="panel">
-  <h3>{{ "Управление персонажами" if locale == "ru" else "Manage Characters" }} ({{ characters|length }})</h3>
-  <div style="display:grid; gap:8px; max-height:420px; overflow-y:auto;">
-    {% for c in characters %}
-    {% set ctr = pick_char_tr(c) %}
-    <div id="admin-char-{{ c.id }}" style="display:flex; align-items:center; justify-content:space-between; gap:12px; padding:8px 12px; border:1px solid var(--border); border-radius:9px;">
-      <div>
-        <a href="/{{ locale }}/characters/{{ c.slug }}" style="font-weight:600;">{{ ctr.name if ctr else c.canonical_name }}</a>
-        <span style="color:var(--muted); font-size:0.82rem;">· {{ c.canonical_name }}</span>
-      </div>
-      <button class="btn btn-secondary btn-sm" style="color:#fda4af;" onclick="deleteCharacter({{ c.id }})">{{ "Удалить" if locale == "ru" else "Delete" }}</button>
+<div id="tab-chars" class="admin-tab" style="display:none;">
+  <div class="panel">
+    <div class="field-group" style="margin-bottom:12px;">
+      <input type="search" placeholder="{{ 'Поиск персонажа в админке...' if locale == 'ru' else 'Filter characters...' }}" oninput="filterRows('char-row', this.value)" />
     </div>
-    {% endfor %}
+    <div style="display:grid; gap:8px; max-height:540px; overflow-y:auto;">
+      {% for c in characters %}
+      {% set ctr = pick_char_tr(c) %}
+      {% set cname = ctr.name if ctr else c.canonical_name %}
+      <div id="admin-char-{{ c.id }}" class="char-row" data-search="{{ (cname ~ ' ' ~ c.canonical_name)|lower }}" style="display:flex; align-items:center; justify-content:space-between; gap:12px; padding:8px 12px; border:1px solid var(--border); border-radius:9px;">
+        <div style="display:flex; align-items:center; gap:10px; min-width:0;">
+          {% if c.image_url %}
+          <img src="{{ c.image_url }}" alt="" style="width:36px; height:36px; object-fit:cover; object-position:center top; border-radius:8px;" />
+          {% endif %}
+          <div>
+            <a href="/{{ locale }}/characters/{{ c.slug }}" style="font-weight:600;">{{ cname }}</a>
+            <div style="font-size:0.78rem; color:var(--muted);">{{ c.canonical_name }}</div>
+          </div>
+        </div>
+        <div style="display:flex; gap:8px;">
+          <a class="btn btn-secondary btn-sm" href="/{{ locale }}/characters/{{ c.slug }}">{{ "Открыть" if locale == "ru" else "Open" }}</a>
+          <button class="btn btn-secondary btn-sm" style="color:#fda4af;" onclick="deleteCharacter({{ c.id }})">{{ "Удалить" if locale == "ru" else "Delete" }}</button>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+</div>
+
+<div id="tab-tools" class="admin-tab" style="display:none;">
+  <div class="panel">
+    <h3>{{ "Локализация уже загруженных записей" if locale == "ru" else "Translate Untranslated Entries" }}</h3>
+    <p style="color:var(--muted); font-size:0.9rem;">
+      {{ "Если какие-то ранее импортированные тайтлы или персонажи остались на английском — нажмите кнопку, чтобы доперевести партию (до 15 тайтлов и 30 персонажей за раз)." if locale == "ru" else "Translate up to 15 remaining English titles and 30 characters to Russian." }}
+    </p>
+    <button type="button" class="btn btn-primary" onclick="translateMissing(this)">{{ "Доперевести английские записи (RU)" if locale == "ru" else "Translate Missing (RU)" }}</button>
+    <div id="translate-result" style="margin-top:12px; color:var(--muted);"></div>
   </div>
 </div>
 {% endblock %}
 
 {% block scripts %}
 <script>
+function switchAdminTab(name, btn) {
+  document.querySelectorAll(".admin-tab").forEach((el) => el.style.display = "none");
+  document.getElementById(`tab-${name}`).style.display = "block";
+  document.querySelectorAll(".admin-tab-btn").forEach((b) => {
+    b.classList.remove("btn-primary");
+    b.classList.add("btn-secondary");
+  });
+  btn.classList.remove("btn-secondary");
+  btn.classList.add("btn-primary");
+}
+
+function filterRows(cls, q) {
+  const low = q.trim().toLowerCase();
+  document.querySelectorAll(`.${cls}`).forEach((row) => {
+    const hay = row.dataset.search || "";
+    row.style.display = (!low || hay.includes(low)) ? "flex" : "none";
+  });
+}
+
+document.getElementById("grant-by-nick-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const fd = new FormData(e.target);
+  const res = await fetch("/api/admin/users/by-username/role", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username: fd.get("username"), role: fd.get("role") }),
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    window.kirokuToast(data.detail || "Error");
+    return;
+  }
+  window.kirokuToast(`${data.username} -> ${data.role}`);
+  setTimeout(() => location.reload(), 500);
+});
+
 async function setUserRole(uid) {
   const role = document.getElementById(`role-${uid}`).value;
   const res = await fetch(`/api/admin/users/${uid}/role`, {
@@ -100,6 +204,19 @@ async function deleteCharacter(cid) {
   if (!confirm("Delete this character?")) return;
   const res = await fetch(`/api/admin/characters/${cid}`, { method: "DELETE" });
   if (res.ok) document.getElementById(`admin-char-${cid}`)?.remove();
+}
+
+async function translateMissing(btn) {
+  btn.disabled = true;
+  const out = document.getElementById("translate-result");
+  out.textContent = "Translating...";
+  try {
+    const res = await fetch("/api/admin/translate-missing", { method: "POST" });
+    const data = await res.json();
+    out.textContent = `Localized media: ${data.translated_media}, characters: ${data.translated_characters}`;
+  } finally {
+    btn.disabled = false;
+  }
 }
 </script>
 {% endblock %}

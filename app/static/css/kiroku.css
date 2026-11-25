@@ -638,6 +638,15 @@ main {
   border-color: var(--accent);
 }
 
+body.compact-cards .grid-4 {
+  grid-template-columns: repeat(auto-fill, minmax(195px, 1fr));
+  gap: 12px;
+}
+
+body.compact-cards .card-poster {
+  height: 205px;
+}
+
 .site-footer {
   border-top: 1px solid var(--border);
   padding: 24px 0;

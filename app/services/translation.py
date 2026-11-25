@@ -1,17 +1,31 @@
+import asyncio
 import re
 import httpx
 
 from app.config import get_settings
 
 _SHIKI_HEADERS = {"User-Agent": "KirokuApp/1.0 (https://kiroku.local)"}
+_SHIKI_SEM = asyncio.Semaphore(2)
 
 
 def _clean_shikimori_bbcode(text: str | None) -> str:
     if not text:
         return ""
-    # Strip Shikimori BBCode tags like [character=123]Name[/character] -> Name
     cleaned = re.sub(r"\[/?[a-zA-Z0-9_]+(?:=[^\]]*)?\]", "", text)
     return re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+
+
+def _has_cyrillic(text: str) -> bool:
+    return bool(re.search(r"[а-яА-ЯёЁ]", text or ""))
+
+
+async def _shiki_get(client: httpx.AsyncClient, url: str, params: dict | None = None) -> httpx.Response:
+    async with _SHIKI_SEM:
+        resp = await client.get(url, params=params)
+        if resp.status_code == 429:
+            await asyncio.sleep(0.8)
+            resp = await client.get(url, params=params)
+        return resp
 
 
 async def fetch_shikimori_ru(
@@ -21,20 +35,19 @@ async def fetch_shikimori_ru(
     search_title: str = "",
 ) -> tuple[str, str]:
     """
-    Fetch canonical Russian title and synopsis from Shikimori API.
-    kind: 'animes' or 'mangas'
-    Returns (russian_title, russian_synopsis).
+    Fetch canonical Russian title and synopsis from Shikimori API with rate-limit retry.
     """
     endpoint_kind = "animes" if kind == "animes" else "mangas"
     try:
-        async with httpx.AsyncClient(timeout=4.5, follow_redirects=True, headers=_SHIKI_HEADERS) as client:
+        async with httpx.AsyncClient(timeout=6.0, follow_redirects=True, headers=_SHIKI_HEADERS) as client:
             item: dict | None = None
             if mal_id:
-                resp = await client.get(f"https://shikimori.io/api/{endpoint_kind}/{mal_id}")
+                resp = await _shiki_get(client, f"https://shikimori.io/api/{endpoint_kind}/{mal_id}")
                 if resp.status_code == 200:
                     item = resp.json()
             if not item and search_title:
-                resp = await client.get(
+                resp = await _shiki_get(
+                    client,
                     f"https://shikimori.io/api/{endpoint_kind}",
                     params={"search": search_title, "limit": 1},
                 )
@@ -50,12 +63,13 @@ async def fetch_shikimori_ru(
 
 
 async def fetch_shikimori_character_ru(name: str) -> str:
-    """Fetch canonical Russian character name from Shikimori API."""
+    """Fetch canonical Russian character name from Shikimori API with rate-limit retry."""
     if not name.strip():
         return ""
     try:
-        async with httpx.AsyncClient(timeout=4.5, follow_redirects=True, headers=_SHIKI_HEADERS) as client:
-            resp = await client.get(
+        async with httpx.AsyncClient(timeout=6.0, follow_redirects=True, headers=_SHIKI_HEADERS) as client:
+            resp = await _shiki_get(
+                client,
                 "https://shikimori.io/api/characters/search",
                 params={"search": name},
             )
@@ -71,8 +85,7 @@ async def fetch_shikimori_character_ru(name: str) -> str:
 
 async def translate_text(text: str, target_locale: str) -> tuple[str, str]:
     """
-    Translate text to target_locale using DeepL, OpenAI, or free Google Translate endpoint fallback.
-    Returns (translated_text, source_tag) where source_tag is 'ai_draft' or 'api_raw'.
+    Translate text to target_locale using DeepL, OpenAI, Google GTX, or MyMemory fallback.
     """
     if not text.strip():
         return "", "api_raw"
@@ -88,7 +101,7 @@ async def translate_text(text: str, target_locale: str) -> tuple[str, str]:
             else "https://api.deepl.com/v2/translate"
         )
         try:
-            async with httpx.AsyncClient(timeout=15.0) as client:
+            async with httpx.AsyncClient(timeout=12.0) as client:
                 resp = await client.post(
                     endpoint,
                     headers={"Authorization": f"DeepL-Auth-Key {settings.deepl_api_key}"},
@@ -104,7 +117,7 @@ async def translate_text(text: str, target_locale: str) -> tuple[str, str]:
 
     if settings.openai_api_key:
         try:
-            async with httpx.AsyncClient(timeout=20.0) as client:
+            async with httpx.AsyncClient(timeout=15.0) as client:
                 resp = await client.post(
                     "https://api.openai.com/v1/chat/completions",
                     headers={"Authorization": f"Bearer {settings.openai_api_key}"},
@@ -131,10 +144,10 @@ async def translate_text(text: str, target_locale: str) -> tuple[str, str]:
         except (httpx.HTTPError, KeyError, IndexError):
             pass
 
-    # Free GTX translation fallback so localized UI always receives translated titles/descriptions
+    # Free GTX translation fallback
     try:
-        snippet = text[:2800]
-        async with httpx.AsyncClient(timeout=4.5) as client:
+        snippet = text[:2600]
+        async with httpx.AsyncClient(timeout=5.0) as client:
             resp = await client.get(
                 "https://translate.googleapis.com/translate_a/single",
                 params={
@@ -149,9 +162,24 @@ async def translate_text(text: str, target_locale: str) -> tuple[str, str]:
                 data = resp.json()
                 chunks = [seg[0] for seg in (data[0] or []) if seg and seg[0]]
                 translated = "".join(chunks).strip()
-                if translated:
+                if translated and (target_locale != "ru" or _has_cyrillic(translated)):
                     return translated, "ai_draft"
     except (httpx.HTTPError, ValueError, TypeError, IndexError):
+        pass
+
+    # Free MyMemory translation fallback (useful if GTX rate-limits shared cloud IPs)
+    try:
+        snippet = text[:480]
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(
+                "https://api.mymemory.translated.net/get",
+                params={"q": snippet, "langpair": f"en|{target_locale}"},
+            )
+            if resp.status_code == 200:
+                translated = ((resp.json().get("responseData") or {}).get("translatedText") or "").strip()
+                if translated and (target_locale != "ru" or _has_cyrillic(translated)):
+                    return translated, "ai_draft"
+    except (httpx.HTTPError, ValueError, TypeError, KeyError):
         pass
 
     return text, "api_raw"

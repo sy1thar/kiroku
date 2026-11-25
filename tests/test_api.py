@@ -209,6 +209,7 @@ def test_registration_login_settings_and_role_permissions(client: TestClient):
     assert upd.status_code == 200
     assert upd.json()["username"] == "nick_updated"
     assert upd.json()["avatar_url"] == "https://example.com/avatar.png"
+    assert client.get("/ru/profile").status_code == 200
     assert client.get("/ru/settings").status_code == 200
 
     pw = client.post(
@@ -240,9 +241,22 @@ def test_registration_login_settings_and_role_permissions(client: TestClient):
     assert client.get("/ru/admin").status_code == 200
     assert client.get("/ru/import").status_code == 200
 
-    promote = client.post(f"/api/admin/users/{user_id}/role", json={"role": "moderator"})
+    promote = client.post(
+        "/api/admin/users/by-username/role",
+        json={"username": "nick_updated", "role": "moderator"},
+    )
     assert promote.status_code == 200
     assert promote.json()["role"] == "moderator"
+
+    # Moderator also cannot access /ru/admin or /ru/import
+    client.post("/api/auth/login", json={"login": "nick_updated", "password": "newsecret456"})
+    assert client.get("/ru/admin").status_code == 403
+    assert client.get("/ru/import").status_code == 403
+    assert client.post(f"/api/admin/media/{frieren['id']}/import-characters", json={"count": 5}).status_code == 403
+
+    # Log back in as Admin
+    client.post("/api/auth/login", json={"login": "Ikazych1", "password": "TestAdminPass1!"})
+    assert client.get("/ru/admin").status_code == 200
 
     # Admin direct edit & delete media
     edit_media = client.patch(

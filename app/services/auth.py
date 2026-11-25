@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.models import User
+from app.roles import USER_ROLES_TABLE
 
 SESSION_COOKIE_NAME = "kiroku_session"
 
@@ -49,12 +50,18 @@ def verify_session_token(token: str | None) -> int | None:
     return None
 
 
-def _is_configured_admin(username: str, email: str) -> bool:
+def _resolve_role_override(username: str, email: str) -> str | None:
     settings = get_settings()
-    return (
-        username.strip().lower() in settings.admin_username_set
-        or email.strip().lower() in settings.admin_email_set
-    )
+    uname_low = username.strip().lower()
+    email_low = email.strip().lower()
+    if uname_low in settings.admin_username_set or email_low in settings.admin_email_set:
+        return "admin"
+    table = {k.strip().lower(): v for k, v in USER_ROLES_TABLE.items() if k.strip()}
+    return table.get(uname_low)
+
+
+def _is_configured_admin(username: str, email: str) -> bool:
+    return _resolve_role_override(username, email) == "admin"
 
 
 def get_current_user(request: Request, db: Session) -> User | None:
@@ -62,10 +69,12 @@ def get_current_user(request: Request, db: Session) -> User | None:
     if not user_id:
         return None
     user = db.get(User, user_id)
-    if user and user.role != "admin" and _is_configured_admin(user.username, user.email):
-        user.role = "admin"
-        db.commit()
-        db.refresh(user)
+    if user:
+        override = _resolve_role_override(user.username, user.email)
+        if override and user.role != override:
+            user.role = override
+            db.commit()
+            db.refresh(user)
     return user
 
 
@@ -114,7 +123,7 @@ def register_user(db: Session, *, username: str, email: str, password: str) -> U
     if existing:
         raise ValueError("Username or email already registered")
 
-    role = "admin" if _is_configured_admin(clean_username, clean_email) else "user"
+    role = _resolve_role_override(clean_username, clean_email) or "user"
     user = User(
         username=clean_username,
         email=clean_email,

@@ -16,7 +16,7 @@ from app.i18n import (
     SOURCE_BADGES,
     t_ui,
 )
-from app.models import Character, Franchise, Media, Revision, SyncCursor, Trait, User, UserListEntry
+from app.models import Character, CustomRole, Franchise, Media, Revision, SyncCursor, Trait, User, UserCustomRole, UserListEntry
 from app.services.auth import SESSION_COOKIE_NAME, get_current_user, get_profile_key, require_admin, require_user
 from app.services.catalog import (
     get_character_detail,
@@ -459,12 +459,42 @@ def settings_localized(locale: str, request: Request, db: Session = Depends(get_
 
 def _render_admin(request: Request, locale: str, db: Session) -> HTMLResponse:
     require_admin(request, db)
-    users = list(db.scalars(select(User).order_by(User.id)).all())
+    users = list(
+        db.scalars(
+            select(User)
+            .options(selectinload(User.custom_role_links).selectinload(UserCustomRole.role))
+            .order_by(User.id)
+        ).all()
+    )
+    custom_roles = list(db.scalars(select(CustomRole).order_by(CustomRole.id)).all())
     media_items = list_media(db, limit=200)
     characters = list_characters(db, limit=200)
     ctx = _base_context(request, locale, f"{t_ui(locale)['nav_admin']} — Kiroku", "/admin", db)
-    ctx.update({"users": users, "media_items": media_items, "characters": characters})
+    ctx.update(
+        {
+            "users": users,
+            "custom_roles": custom_roles,
+            "media_items": media_items,
+            "characters": characters,
+        }
+    )
     return templates.TemplateResponse(request, "admin.html", ctx)
+
+
+@router.get("/{locale}/u/{username}", response_class=HTMLResponse)
+def public_user_profile(locale: str, username: str, request: Request, db: Session = Depends(get_db)):
+    if locale not in ("ru", "en"):
+        raise HTTPException(status_code=404)
+    profile_user = db.scalar(
+        select(User)
+        .where(func.lower(User.username) == username.lower())
+        .options(selectinload(User.custom_role_links).selectinload(UserCustomRole.role))
+    )
+    if not profile_user:
+        raise HTTPException(status_code=404, detail="User not found")
+    ctx = _base_context(request, locale, f"{profile_user.username} — Kiroku", f"/u/{username}", db)
+    ctx["profile_user"] = profile_user
+    return templates.TemplateResponse(request, "public_profile.html", ctx)
 
 
 @router.get("/admin", response_class=HTMLResponse)

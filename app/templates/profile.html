@@ -10,8 +10,12 @@
 
 <div class="detail-layout">
   <aside>
+    {% set primary_crole = current_user.custom_role_links[0].role if current_user.custom_role_links else None %}
     <div class="panel" style="text-align:center;">
-      <div style="width:128px; height:128px; border-radius:999px; margin:0 auto 14px; overflow:hidden; background:linear-gradient(135deg, var(--accent), #38bdf8); display:grid; place-items:center; font-size:2.4rem; font-weight:800;">
+      <div
+        class="avatar-frame-wrap {% if primary_crole %}frame-{{ primary_crole.avatar_frame }}{% endif %}"
+        style="width:128px; height:128px; border-radius:999px; margin:0 auto 14px; overflow:hidden; background:linear-gradient(135deg, var(--accent), #38bdf8); display:grid; place-items:center; font-size:2.4rem; font-weight:800; {% if primary_crole and primary_crole.avatar_frame != 'none' %}border:3px solid {{ primary_crole.frame_color }}; --frame-color: {{ primary_crole.frame_color }};{% endif %}"
+      >
         {% if current_user.avatar_url %}
         <img id="avatar-preview" src="{{ current_user.avatar_url }}" alt="{{ current_user.username }}" style="width:100%; height:100%; object-fit:cover;" />
         {% else %}
@@ -19,11 +23,23 @@
         <span id="avatar-fallback">{{ current_user.username[:2].upper() }}</span>
         {% endif %}
       </div>
-      <strong>{{ current_user.username }}</strong>
+      <strong class="user-nick-text" style="font-size:1.15rem; {% if primary_crole %}color:{{ primary_crole.nick_color }};{% endif %}">{{ current_user.username }}</strong>
       <div style="color:var(--muted); font-size:0.86rem; margin-top:4px;">{{ current_user.email }}</div>
+      {% if current_user.custom_role_links %}
+      <div style="display:flex; flex-wrap:wrap; justify-content:center; gap:6px; margin-top:12px;">
+        {% for link in current_user.custom_role_links %}
+        <span class="badge" style="background:{{ link.role.badge_color }}22; border-color:{{ link.role.badge_color }}; color:{{ link.role.badge_color }};">
+          {{ link.role.name }}
+        </span>
+        {% endfor %}
+      </div>
+      {% endif %}
       {% if current_user.bio %}
       <p style="font-size:0.86rem; color:#d6deed; margin-top:12px;">{{ current_user.bio }}</p>
       {% endif %}
+      <div style="margin-top:12px;">
+        <a href="/{{ locale }}/u/{{ current_user.username }}" style="font-size:0.82rem; color:var(--sky);">{{ "Публичная страница профиля" if locale == "ru" else "Public profile link" }} →</a>
+      </div>
     </div>
   </aside>
 

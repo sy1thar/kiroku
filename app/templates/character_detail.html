@@ -36,6 +36,29 @@
         {% endif %}
       </div>
     </div>
+
+    <div class="panel">
+      <h3>{{ "Указать внешность" if locale == "ru" else "Edit Appearance" }}</h3>
+      <form id="user-appearance-form" style="display:grid; gap:10px;">
+        <div class="field-group">
+          <label>{{ ui.hair_color }}</label>
+          <select name="hair_color">
+            {% for key, labels in color_labels.items() %}
+            <option value="{{ key }}" {% if character.hair_color == key %}selected{% endif %}>{{ labels[locale] }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="field-group">
+          <label>{{ ui.eye_color }}</label>
+          <select name="eye_color">
+            {% for key, labels in color_labels.items() %}
+            <option value="{{ key }}" {% if character.eye_color == key %}selected{% endif %}>{{ labels[locale] }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <button class="btn btn-secondary btn-sm" type="submit">{{ "Сохранить внешность" if locale == "ru" else "Save Appearance" }}</button>
+      </form>
+    </div>
   </aside>
 
   <section>
@@ -101,6 +124,26 @@
           <span class="trait-count">{{ tl.votes_count }}</span>
         </button>
         {% endfor %}
+      </div>
+
+      <div style="margin-top:16px; padding-top:14px; border-top:1px solid var(--border); display:grid; gap:10px;">
+        <div style="display:flex; gap:8px; flex-wrap:wrap;">
+          <select id="add-existing-trait-select" style="flex:1; min-width:190px; padding:7px 10px; border-radius:9px; background:var(--bg-soft); color:var(--text); border:1px solid var(--border-strong);">
+            {% for tr_item in all_traits %}
+            <option value="{{ tr_item.slug }}">{{ tr_item.name_ru if locale == "ru" else tr_item.name_en }}</option>
+            {% endfor %}
+          </select>
+          <button type="button" class="btn btn-secondary btn-sm" onclick="addExistingTrait({{ character.id }})">+ {{ "Добавить тег" if locale == "ru" else "Add Tag" }}</button>
+        </div>
+        <div style="display:flex; gap:8px; flex-wrap:wrap;">
+          <input type="text" id="custom-trait-name" autocomplete="off" placeholder="{{ 'Свой тег (например: Шрам, Катана)...' if locale == 'ru' else 'Custom tag...' }}" style="flex:1; min-width:190px; padding:7px 10px; border-radius:9px; background:var(--bg-soft); color:var(--text); border:1px solid var(--border-strong);" />
+          <select id="custom-trait-cat" style="padding:7px 10px; border-radius:9px; background:var(--bg-soft); color:var(--text); border:1px solid var(--border-strong);">
+            <option value="appearance">{{ "Внешность" if locale == "ru" else "Appearance" }}</option>
+            <option value="personality">{{ "Характер" if locale == "ru" else "Personality" }}</option>
+            <option value="ability">{{ "Способность" if locale == "ru" else "Ability" }}</option>
+          </select>
+          <button type="button" class="btn btn-primary btn-sm" onclick="addCustomTrait({{ character.id }})">+ {{ "Создать тег" if locale == "ru" else "Create Tag" }}</button>
+        </div>
       </div>
     </div>
 
@@ -194,6 +237,46 @@
 {% endblock %}
 
 {% block scripts %}
+<script>
+const appForm = document.getElementById("user-appearance-form");
+if (appForm) {
+  appForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const fd = new FormData(appForm);
+    const res = await fetch("/api/characters/{{ character.id }}/appearance", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        hair_color: fd.get("hair_color"),
+        eye_color: fd.get("eye_color"),
+        hair_length: "{{ character.hair_length }}",
+      }),
+    });
+    if (res.ok) location.reload();
+  });
+}
+
+async function addExistingTrait(charId) {
+  const slug = document.getElementById("add-existing-trait-select").value;
+  if (!slug) return;
+  const res = await fetch("/api/traits/vote", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ character_id: charId, trait_slug: slug }),
+  });
+  if (res.ok) location.reload();
+}
+
+async function addCustomTrait(charId) {
+  const name = document.getElementById("custom-trait-name").value.trim();
+  const cat = document.getElementById("custom-trait-cat").value;
+  if (!name) return;
+  const res = await fetch(`/api/traits/custom?character_id=${charId}&name=${encodeURIComponent(name)}&category=${encodeURIComponent(cat)}`, {
+    method: "POST",
+  });
+  if (res.ok) location.reload();
+}
+</script>
 {% if current_user and current_user.role == 'admin' %}
 <script>
 document.getElementById("admin-char-edit-form").addEventListener("submit", async (e) => {

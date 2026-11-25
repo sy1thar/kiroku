@@ -10,6 +10,7 @@
 
 <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:18px;">
   <button class="btn btn-primary btn-sm admin-tab-btn" onclick="switchAdminTab('users', this)">{{ "Пользователи и роли" if locale == "ru" else "Users & Roles" }} ({{ users|length }})</button>
+  <button class="btn btn-secondary btn-sm admin-tab-btn" onclick="switchAdminTab('custom', this)">{{ "Кастомные роли (Рамки и цвета)" if locale == "ru" else "Custom Cosmetic Roles" }} ({{ custom_roles|length }})</button>
   <button class="btn btn-secondary btn-sm admin-tab-btn" onclick="switchAdminTab('media', this)">{{ "Тайтлы" if locale == "ru" else "Titles" }} ({{ media_items|length }})</button>
   <button class="btn btn-secondary btn-sm admin-tab-btn" onclick="switchAdminTab('chars', this)">{{ "Персонажи" if locale == "ru" else "Characters" }} ({{ characters|length }})</button>
   <button class="btn btn-secondary btn-sm admin-tab-btn" onclick="switchAdminTab('tools', this)">{{ "Инструменты" if locale == "ru" else "Tools" }}</button>
@@ -17,14 +18,14 @@
 
 <div id="tab-users" class="admin-tab">
   <div class="panel">
-    <h3>{{ "Выдать роль или модерку по нику" if locale == "ru" else "Assign Role by Username" }}</h3>
-    <form id="grant-by-nick-form" style="display:flex; gap:10px; flex-wrap:wrap; align-items:flex-end;">
+    <h3>{{ "Выдать системную роль или модерку по нику" if locale == "ru" else "Assign System Role by Username" }}</h3>
+    <form id="grant-by-nick-form" autocomplete="off" style="display:flex; gap:10px; flex-wrap:wrap; align-items:flex-end;">
       <div class="field-group" style="max-width:260px;">
         <label>{{ "Никнейм пользователя" if locale == "ru" else "Username" }}</label>
-        <input type="text" name="username" placeholder="Nickname..." required />
+        <input type="text" name="role_target_nick" autocomplete="new-password" data-lpignore="true" placeholder="{{ 'Введите ник вручную...' if locale == 'ru' else 'Type username...' }}" required />
       </div>
       <div class="field-group" style="max-width:200px;">
-        <label>{{ "Роль" if locale == "ru" else "Role" }}</label>
+        <label>{{ "Системная роль" if locale == "ru" else "System Role" }}</label>
         <select name="role">
           <option value="moderator">moderator</option>
           <option value="admin">admin</option>
@@ -36,17 +37,27 @@
   </div>
 
   <div class="panel">
-    <h3>{{ "Список пользователей" if locale == "ru" else "Registered Users" }}</h3>
+    <h3>{{ "Список пользователей и их кастомные роли" if locale == "ru" else "Users & Assigned Badges" }}</h3>
     <div class="field-group" style="margin-bottom:12px;">
-      <input type="search" placeholder="{{ 'Поиск пользователя...' if locale == 'ru' else 'Filter users...' }}" oninput="filterRows('user-row', this.value)" />
+      <input type="search" name="user_filter_q" autocomplete="off" placeholder="{{ 'Поиск пользователя...' if locale == 'ru' else 'Filter users...' }}" oninput="filterRows('user-row', this.value)" />
     </div>
     <div style="display:grid; gap:8px;">
       {% for u in users %}
       <div class="user-row" data-search="{{ (u.username ~ ' ' ~ u.email ~ ' ' ~ u.role)|lower }}" style="display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; padding:10px 12px; border:1px solid var(--border); border-radius:10px; background:var(--bg-soft);">
         <div>
-          <strong>{{ u.username }}</strong>
+          <a href="/{{ locale }}/u/{{ u.username }}" style="font-weight:700;">{{ u.username }}</a>
           <span style="color:var(--muted); font-size:0.85rem;">· {{ u.email }}</span>
           <span class="badge" style="margin-left:6px;">{{ u.role }}</span>
+          {% if u.custom_role_links %}
+          <div style="display:flex; flex-wrap:wrap; gap:6px; margin-top:6px;">
+            {% for link in u.custom_role_links %}
+            <span class="badge" style="background:{{ link.role.badge_color }}22; border-color:{{ link.role.badge_color }}; color:{{ link.role.badge_color }};">
+              {{ link.role.name }}
+              <button type="button" onclick="unassignCustomRole('{{ u.username }}', {{ link.role.id }})" style="background:none; border:none; color:inherit; cursor:pointer; padding:0 0 0 4px; font-weight:800;">×</button>
+            </span>
+            {% endfor %}
+          </div>
+          {% endif %}
         </div>
         <div style="display:flex; align-items:center; gap:8px;">
           {% if u.id != current_user.id %}
@@ -67,10 +78,79 @@
   </div>
 </div>
 
+<div id="tab-custom" class="admin-tab" style="display:none;">
+  <div class="panel">
+    <h3>{{ "Создать любую кастомную роль (только украшение, без прав доступа)" if locale == "ru" else "Create Custom Cosmetic Role" }}</h3>
+    <form id="create-custom-role-form" autocomplete="off" style="display:grid; gap:12px;">
+      <div style="display:flex; gap:12px; flex-wrap:wrap;">
+        <div class="field-group" style="min-width:220px;">
+          <label>{{ "Название роли (любое)" if locale == "ru" else "Role Name (any)" }}</label>
+          <input type="text" name="crole_name" autocomplete="off" placeholder="Охотник S-ранга / VIP / Легенда..." required />
+        </div>
+        <div class="field-group" style="max-width:160px;">
+          <label>{{ "Цвет бейджа" if locale == "ru" else "Badge Color" }}</label>
+          <input type="color" name="badge_color" value="#7c6bff" style="height:38px; padding:2px;" />
+        </div>
+        <div class="field-group" style="max-width:160px;">
+          <label>{{ "Цвет ника" if locale == "ru" else "Nick Color" }}</label>
+          <input type="color" name="nick_color" value="#fcd34d" style="height:38px; padding:2px;" />
+        </div>
+        <div class="field-group" style="min-width:170px;">
+          <label>{{ "Рамка аватара" if locale == "ru" else "Avatar Frame" }}</label>
+          <select name="avatar_frame">
+            <option value="glow">{{ "Свечение (Glow)" if locale == "ru" else "Glow" }}</option>
+            <option value="solid">{{ "Обычная (Solid)" if locale == "ru" else "Solid" }}</option>
+            <option value="rainbow">{{ "Радужная (Rainbow)" if locale == "ru" else "Rainbow" }}</option>
+            <option value="none">{{ "Без рамки" if locale == "ru" else "None" }}</option>
+          </select>
+        </div>
+        <div class="field-group" style="max-width:160px;">
+          <label>{{ "Цвет рамки" if locale == "ru" else "Frame Color" }}</label>
+          <input type="color" name="frame_color" value="#f59e0b" style="height:38px; padding:2px;" />
+        </div>
+      </div>
+      <button class="btn btn-primary" type="submit" style="width:max-content;">{{ "Создать роль" if locale == "ru" else "Create Role" }}</button>
+    </form>
+  </div>
+
+  <div class="panel">
+    <h3>{{ "Выдать кастомную роль любому пользователю (включая себя, сколько угодно ролей)" if locale == "ru" else "Assign Custom Role to Any User" }}</h3>
+    {% if custom_roles %}
+    <form id="assign-custom-role-form" autocomplete="off" style="display:flex; gap:10px; flex-wrap:wrap; align-items:flex-end;">
+      <div class="field-group" style="max-width:250px;">
+        <label>{{ "Никнейм пользователя" if locale == "ru" else "Username" }}</label>
+        <input type="text" name="custom_target_nick" autocomplete="new-password" data-lpignore="true" placeholder="{{ 'Ник (например Ikazych1)...' if locale == 'ru' else 'Username...' }}" required />
+      </div>
+      <div class="field-group" style="max-width:260px;">
+        <label>{{ "Выберите роль" if locale == "ru" else "Select Role" }}</label>
+        <select name="role_id">
+          {% for cr in custom_roles %}
+          <option value="{{ cr.id }}">{{ cr.name }} ({{ cr.avatar_frame }})</option>
+          {% endfor %}
+        </select>
+      </div>
+      <button class="btn btn-primary" type="submit">{{ "Надеть роль на профиль" if locale == "ru" else "Assign Role" }}</button>
+    </form>
+
+    <div style="display:flex; flex-wrap:wrap; gap:10px; margin-top:16px;">
+      {% for cr in custom_roles %}
+      <div style="display:flex; align-items:center; gap:8px; padding:8px 12px; border:1px solid {{ cr.badge_color }}; border-radius:10px; background:{{ cr.badge_color }}18;">
+        <span style="color:{{ cr.nick_color }}; font-weight:700;">{{ cr.name }}</span>
+        <span style="font-size:0.75rem; color:var(--muted);">({{ cr.avatar_frame }})</span>
+        <button type="button" class="btn btn-secondary btn-sm" style="padding:2px 7px; color:#fda4af;" onclick="deleteCustomRole({{ cr.id }})">×</button>
+      </div>
+      {% endfor %}
+    </div>
+    {% else %}
+    <p style="color:var(--muted); margin:0;">{{ "Сначала создайте первую кастомную роль выше." if locale == "ru" else "Create a custom role above first." }}</p>
+    {% endif %}
+  </div>
+</div>
+
 <div id="tab-media" class="admin-tab" style="display:none;">
   <div class="panel">
     <div class="field-group" style="margin-bottom:12px;">
-      <input type="search" placeholder="{{ 'Поиск тайтла в админке...' if locale == 'ru' else 'Filter titles...' }}" oninput="filterRows('media-row', this.value)" />
+      <input type="search" name="media_filter_q" autocomplete="off" placeholder="{{ 'Поиск тайтла в админке...' if locale == 'ru' else 'Filter titles...' }}" oninput="filterRows('media-row', this.value)" />
     </div>
     <div style="display:grid; gap:8px; max-height:540px; overflow-y:auto;">
       {% for m in media_items %}
@@ -99,7 +179,7 @@
 <div id="tab-chars" class="admin-tab" style="display:none;">
   <div class="panel">
     <div class="field-group" style="margin-bottom:12px;">
-      <input type="search" placeholder="{{ 'Поиск персонажа в админке...' if locale == 'ru' else 'Filter characters...' }}" oninput="filterRows('char-row', this.value)" />
+      <input type="search" name="char_filter_q" autocomplete="off" placeholder="{{ 'Поиск персонажа в админке...' if locale == 'ru' else 'Filter characters...' }}" oninput="filterRows('char-row', this.value)" />
     </div>
     <div style="display:grid; gap:8px; max-height:540px; overflow-y:auto;">
       {% for c in characters %}
@@ -129,7 +209,7 @@
   <div class="panel">
     <h3>{{ "Локализация уже загруженных записей" if locale == "ru" else "Translate Untranslated Entries" }}</h3>
     <p style="color:var(--muted); font-size:0.9rem;">
-      {{ "Если какие-то ранее импортированные тайтлы или персонажи остались на английском — нажмите кнопку, чтобы доперевести партию (до 15 тайтлов и 30 персонажей за раз)." if locale == "ru" else "Translate up to 15 remaining English titles and 30 characters to Russian." }}
+      {{ "Переводит названия, описания тайтлов и биографии персонажей на русский язык (до 15 тайтлов и 20 персонажей за нажатие)." if locale == "ru" else "Translate up to 15 titles and 20 character bios to Russian." }}
     </p>
     <button type="button" class="btn btn-primary" onclick="translateMissing(this)">{{ "Доперевести английские записи (RU)" if locale == "ru" else "Translate Missing (RU)" }}</button>
     <div id="translate-result" style="margin-top:12px; color:var(--muted);"></div>
@@ -164,7 +244,7 @@ document.getElementById("grant-by-nick-form").addEventListener("submit", async (
   const res = await fetch("/api/admin/users/by-username/role", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ username: fd.get("username"), role: fd.get("role") }),
+    body: JSON.stringify({ username: fd.get("role_target_nick"), role: fd.get("role") }),
   });
   const data = await res.json();
   if (!res.ok) {
@@ -174,6 +254,65 @@ document.getElementById("grant-by-nick-form").addEventListener("submit", async (
   window.kirokuToast(`${data.username} -> ${data.role}`);
   setTimeout(() => location.reload(), 500);
 });
+
+document.getElementById("create-custom-role-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const fd = new FormData(e.target);
+  const res = await fetch("/api/admin/custom-roles", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      name: fd.get("crole_name"),
+      badge_color: fd.get("badge_color"),
+      nick_color: fd.get("nick_color"),
+      avatar_frame: fd.get("avatar_frame"),
+      frame_color: fd.get("frame_color"),
+    }),
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    window.kirokuToast(data.detail || "Error");
+    return;
+  }
+  location.reload();
+});
+
+const assignCustomForm = document.getElementById("assign-custom-role-form");
+if (assignCustomForm) {
+  assignCustomForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    const res = await fetch("/api/admin/custom-roles/assign", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        username: fd.get("custom_target_nick"),
+        role_id: Number(fd.get("role_id")),
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      window.kirokuToast(data.detail || "Error");
+      return;
+    }
+    window.kirokuToast(`${data.username} + ${data.role_name}`);
+    setTimeout(() => location.reload(), 450);
+  });
+}
+
+async function unassignCustomRole(username, roleId) {
+  const res = await fetch("/api/admin/custom-roles/unassign", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username, role_id: roleId }),
+  });
+  if (res.ok) location.reload();
+}
+
+async function deleteCustomRole(roleId) {
+  const res = await fetch(`/api/admin/custom-roles/${roleId}`, { method: "DELETE" });
+  if (res.ok) location.reload();
+}
 
 async function setUserRole(uid) {
   const role = document.getElementById(`role-${uid}`).value;

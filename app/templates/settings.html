@@ -2,59 +2,152 @@
 {% block content %}
 <div class="section-head" style="margin-top:0;">
   <h2>{{ "Настройки сайта" if locale == "ru" else "Site Settings" }}</h2>
+  <button class="btn btn-secondary btn-sm" type="button" onclick="resetSitePrefs()">{{ "Сбросить по умолчанию" if locale == "ru" else "Reset Defaults" }}</button>
 </div>
 
-<div class="grid-3" style="grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));">
+<div class="grid-3" style="grid-template-columns: repeat(auto-fit, minmax(310px, 1fr));">
   <div class="panel">
-    <h3>{{ "Язык интерфейса" if locale == "ru" else "Interface Language" }}</h3>
+    <h3>{{ "Язык сайта" if locale == "ru" else "Interface Language" }}</h3>
     <p style="color:var(--muted); font-size:0.9rem;">
-      {{ "Выберите основной язык сайта, названий и описаний." if locale == "ru" else "Choose primary language for UI, titles, and synopses." }}
+      {{ "Основной язык интерфейса, названий тайтлов, описаний и имён персонажей." if locale == "ru" else "Primary language for UI, titles, synopses, and characters." }}
     </p>
-    <div style="display:flex; gap:10px;">
+    <div style="display:flex; gap:10px; flex-wrap:wrap;">
       <a class="btn {% if locale == 'ru' %}btn-primary{% else %}btn-secondary{% endif %}" href="/set-locale/ru?next=/ru/settings">Русский (RU)</a>
       <a class="btn {% if locale == 'en' %}btn-primary{% else %}btn-secondary{% endif %}" href="/set-locale/en?next=/en/settings">English (EN)</a>
     </div>
   </div>
 
   <div class="panel">
-    <h3>{{ "Защита от спойлеров и вид" if locale == "ru" else "Spoiler Guard & Display" }}</h3>
+    <h3>{{ "Тема и внешний вид" if locale == "ru" else "Theme & Appearance" }}</h3>
     <div style="display:grid; gap:12px;">
-      <label style="display:flex; align-items:center; gap:10px; font-size:0.92rem; cursor:pointer;">
-        <input type="checkbox" id="setting-spoilers" />
-        <span>{{ "Автоматически открывать сюжетные спойлеры на страницах персонажей" if locale == "ru" else "Automatically reveal story spoilers on character pages" }}</span>
+      <div class="field-group">
+        <label>{{ "Акцентный цвет сайта" if locale == "ru" else "Accent Color" }}</label>
+        <select id="setting-accent">
+          <option value="#7c6bff">{{ "Фиолетовый Kiroku (По умолчанию)" if locale == "ru" else "Kiroku Violet (Default)" }}</option>
+          <option value="#0ea5e9">{{ "Небесно-синий" if locale == "ru" else "Sky Blue" }}</option>
+          <option value="#10b981">{{ "Изумрудный" if locale == "ru" else "Emerald" }}</option>
+          <option value="#f43f5e">{{ "Алый неон" if locale == "ru" else "Crimson Rose" }}</option>
+          <option value="#f59e0b">{{ "Янтарное золото" if locale == "ru" else "Amber Gold" }}</option>
+        </select>
+      </div>
+      <div class="field-group">
+        <label>{{ "Скругление карточек" if locale == "ru" else "Card Corner Radius" }}</label>
+        <select id="setting-radius">
+          <option value="14px">{{ "Стандарт (14px)" if locale == "ru" else "Standard (14px)" }}</option>
+          <option value="4px">{{ "Острые углы (4px)" if locale == "ru" else "Sharp (4px)" }}</option>
+          <option value="22px">{{ "Мягкое (22px)" if locale == "ru" else "Rounded (22px)" }}</option>
+        </select>
+      </div>
+      <label style="display:flex; align-items:center; gap:10px; font-size:0.9rem; cursor:pointer;">
+        <input type="checkbox" id="setting-glow" checked />
+        <span>{{ "Фоновое неоновое свечение" if locale == "ru" else "Ambient background glow" }}</span>
       </label>
-      <label style="display:flex; align-items:center; gap:10px; font-size:0.92rem; cursor:pointer;">
-        <input type="checkbox" id="setting-compact" />
-        <span>{{ "Компактная сетка карточек" if locale == "ru" else "Compact card grid layout" }}</span>
+      <label style="display:flex; align-items:center; gap:10px; font-size:0.9rem; cursor:pointer;">
+        <input type="checkbox" id="setting-animations" checked />
+        <span>{{ "Плавные анимации карточек" if locale == "ru" else "Smooth card hover animations" }}</span>
       </label>
-      <button class="btn btn-primary btn-sm" type="button" onclick="saveSitePrefs()">{{ "Сохранить настройки сайта" if locale == "ru" else "Save Site Settings" }}</button>
     </div>
   </div>
 
-  {% if current_user %}
   <div class="panel">
-    <h3>{{ "Аккаунт" if locale == "ru" else "Account" }}</h3>
-    <p style="color:var(--muted); font-size:0.9rem;">
-      {{ "Редактировать ник, аватар, описание и пароль можно в настройках профиля." if locale == "ru" else "Edit your nickname, avatar, bio, and password in Profile Settings." }}
-    </p>
-    <a class="btn btn-secondary" href="/{{ locale }}/profile">{{ "Открыть профиль" if locale == "ru" else "Open Profile" }} ({{ current_user.username }})</a>
+    <h3>{{ "Каталог и карточки" if locale == "ru" else "Catalog & Cards" }}</h3>
+    <div style="display:grid; gap:12px;">
+      <div class="field-group">
+        <label>{{ "Плотность сетки" if locale == "ru" else "Grid Density" }}</label>
+        <select id="setting-density">
+          <option value="normal">{{ "Обычная" if locale == "ru" else "Normal" }}</option>
+          <option value="compact">{{ "Компактная (больше карточек)" if locale == "ru" else "Compact" }}</option>
+          <option value="large">{{ "Крупная" if locale == "ru" else "Large" }}</option>
+        </select>
+      </div>
+      <label style="display:flex; align-items:center; gap:10px; font-size:0.9rem; cursor:pointer;">
+        <input type="checkbox" id="setting-show-ratings" checked />
+        <span>{{ "Показывать рейтинг ★ на обложках" if locale == "ru" else "Show ★ ratings on covers" }}</span>
+      </label>
+      <label style="display:flex; align-items:center; gap:10px; font-size:0.9rem; cursor:pointer;">
+        <input type="checkbox" id="setting-show-badges" checked />
+        <span>{{ "Показывать бейджи формата (Аниме, Игра...)" if locale == "ru" else "Show medium badges on covers" }}</span>
+      </label>
+      <label style="display:flex; align-items:center; gap:10px; font-size:0.9rem; cursor:pointer;">
+        <input type="checkbox" id="setting-cosmetics" checked />
+        <span>{{ "Показывать рамки и цвета ролей пользователей" if locale == "ru" else "Show custom user role frames & colors" }}</span>
+      </label>
+    </div>
   </div>
-  {% endif %}
+
+  <div class="panel">
+    <h3>{{ "Контент и поиск" if locale == "ru" else "Content & Search" }}</h3>
+    <div style="display:grid; gap:12px;">
+      <label style="display:flex; align-items:center; gap:10px; font-size:0.9rem; cursor:pointer;">
+        <input type="checkbox" id="setting-spoilers" />
+        <span>{{ "Автоматически открывать спойлеры на страницах персонажей" if locale == "ru" else "Auto-reveal story spoilers on character pages" }}</span>
+      </label>
+      <div class="field-group">
+        <label>{{ "Поиск по нажатию Enter в шапке" if locale == "ru" else "Header Search Enter Target" }}</label>
+        <select id="setting-search-target">
+          <option value="catalog">{{ "Искать в Каталоге тайтлов" if locale == "ru" else "Search Titles Catalog" }}</option>
+          <option value="characters">{{ "Искать в Персонажах" if locale == "ru" else "Search Characters" }}</option>
+        </select>
+      </div>
+      <button class="btn btn-primary" type="button" onclick="saveSitePrefs()">{{ "Сохранить все настройки сайта" if locale == "ru" else "Save All Site Settings" }}</button>
+    </div>
+  </div>
 </div>
 {% endblock %}
 
 {% block scripts %}
 <script>
+const accentEl = document.getElementById("setting-accent");
+const radiusEl = document.getElementById("setting-radius");
+const glowEl = document.getElementById("setting-glow");
+const animEl = document.getElementById("setting-animations");
+const densityEl = document.getElementById("setting-density");
+const ratingsEl = document.getElementById("setting-show-ratings");
+const badgesEl = document.getElementById("setting-show-badges");
+const cosEl = document.getElementById("setting-cosmetics");
 const spEl = document.getElementById("setting-spoilers");
-const cmpEl = document.getElementById("setting-compact");
-spEl.checked = localStorage.getItem("kiroku_auto_reveal_spoilers") === "1";
-cmpEl.checked = localStorage.getItem("kiroku_compact_cards") === "1";
+const targetEl = document.getElementById("setting-search-target");
+
+function loadSitePrefsUI() {
+  accentEl.value = localStorage.getItem("kiroku_accent") || "#7c6bff";
+  radiusEl.value = localStorage.getItem("kiroku_radius") || "14px";
+  glowEl.checked = localStorage.getItem("kiroku_glow") !== "0";
+  animEl.checked = localStorage.getItem("kiroku_animations") !== "0";
+  densityEl.value = localStorage.getItem("kiroku_density") || (localStorage.getItem("kiroku_compact_cards") === "1" ? "compact" : "normal");
+  ratingsEl.checked = localStorage.getItem("kiroku_show_ratings") !== "0";
+  badgesEl.checked = localStorage.getItem("kiroku_show_badges") !== "0";
+  cosEl.checked = localStorage.getItem("kiroku_show_cosmetics") !== "0";
+  spEl.checked = localStorage.getItem("kiroku_auto_reveal_spoilers") === "1";
+  targetEl.value = localStorage.getItem("kiroku_search_target") || "catalog";
+}
 
 function saveSitePrefs() {
+  localStorage.setItem("kiroku_accent", accentEl.value);
+  localStorage.setItem("kiroku_radius", radiusEl.value);
+  localStorage.setItem("kiroku_glow", glowEl.checked ? "1" : "0");
+  localStorage.setItem("kiroku_animations", animEl.checked ? "1" : "0");
+  localStorage.setItem("kiroku_density", densityEl.value);
+  localStorage.setItem("kiroku_compact_cards", densityEl.value === "compact" ? "1" : "0");
+  localStorage.setItem("kiroku_show_ratings", ratingsEl.checked ? "1" : "0");
+  localStorage.setItem("kiroku_show_badges", badgesEl.checked ? "1" : "0");
+  localStorage.setItem("kiroku_show_cosmetics", cosEl.checked ? "1" : "0");
   localStorage.setItem("kiroku_auto_reveal_spoilers", spEl.checked ? "1" : "0");
-  localStorage.setItem("kiroku_compact_cards", cmpEl.checked ? "1" : "0");
-  document.body.classList.toggle("compact-cards", cmpEl.checked);
-  window.kirokuToast("{{ 'Настройки сайта сохранены!' if locale == 'ru' else 'Site settings saved!' }}");
+  localStorage.setItem("kiroku_search_target", targetEl.value);
+  if (window.applyKirokuSitePrefs) window.applyKirokuSitePrefs();
+  window.kirokuToast("{{ 'Все настройки сайта сохранены!' if locale == 'ru' else 'All site settings saved!' }}");
 }
+
+function resetSitePrefs() {
+  [
+    "kiroku_accent", "kiroku_radius", "kiroku_glow", "kiroku_animations",
+    "kiroku_density", "kiroku_compact_cards", "kiroku_show_ratings",
+    "kiroku_show_badges", "kiroku_show_cosmetics", "kiroku_auto_reveal_spoilers", "kiroku_search_target"
+  ].forEach((k) => localStorage.removeItem(k));
+  loadSitePrefsUI();
+  if (window.applyKirokuSitePrefs) window.applyKirokuSitePrefs();
+  window.kirokuToast("{{ 'Настройки сброшены!' if locale == 'ru' else 'Settings reset!' }}");
+}
+
+loadSitePrefsUI();
 </script>
 {% endblock %}

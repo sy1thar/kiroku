@@ -76,6 +76,26 @@ class AdminUsernameRoleRequest(BaseModel):
 
 class AdminImportCharactersRequest(BaseModel):
     count: int = Field(ge=1, le=20, default=12)
+    locale: str = Field(pattern="^(ru|en)$", default="ru")
+
+
+class CustomRoleCreateRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=60)
+    badge_color: str = Field(default="#7c6bff", max_length=24)
+    nick_color: str = Field(default="#eef2f9", max_length=24)
+    avatar_frame: str = Field(default="glow", pattern="^(none|solid|glow|rainbow)$")
+    frame_color: str = Field(default="#7c6bff", max_length=24)
+
+
+class AssignCustomRoleRequest(BaseModel):
+    username: str = Field(min_length=2, max_length=60)
+    role_id: int
+
+
+class CharacterAppearanceUpdateRequest(BaseModel):
+    hair_color: str = Field(default="unknown", max_length=40)
+    eye_color: str = Field(default="unknown", max_length=40)
+    hair_length: str = Field(default="unknown", max_length=40)
 
 
 class AdminMediaUpdateRequest(BaseModel):

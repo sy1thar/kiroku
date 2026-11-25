@@ -244,6 +244,35 @@ class User(Base):
     preferred_locale: Mapped[str] = mapped_column(String(10), default="ru")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
+    custom_role_links: Mapped[list["UserCustomRole"]] = relationship(
+        back_populates="user", cascade="all, delete-orphan"
+    )
+
+
+class CustomRole(Base):
+    __tablename__ = "custom_roles"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(80), unique=True, index=True)
+    badge_color: Mapped[str] = mapped_column(String(24), default="#7c6bff")
+    nick_color: Mapped[str] = mapped_column(String(24), default="#eef2f9")
+    avatar_frame: Mapped[str] = mapped_column(String(32), default="solid")  # none | solid | glow | rainbow
+    frame_color: Mapped[str] = mapped_column(String(24), default="#7c6bff")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class UserCustomRole(Base):
+    __tablename__ = "user_custom_roles"
+    __table_args__ = (UniqueConstraint("user_id", "role_id", name="uq_user_custom_role"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    role_id: Mapped[int] = mapped_column(ForeignKey("custom_roles.id", ondelete="CASCADE"), index=True)
+    assigned_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    user: Mapped["User"] = relationship(back_populates="custom_role_links")
+    role: Mapped["CustomRole"] = relationship()
+
 
 class SyncCursor(Base):
     __tablename__ = "sync_cursors"

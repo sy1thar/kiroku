@@ -647,6 +647,61 @@ body.compact-cards .card-poster {
   height: 205px;
 }
 
+body.large-cards .grid-4 {
+  grid-template-columns: repeat(auto-fill, minmax(290px, 1fr));
+  gap: 20px;
+}
+
+body.large-cards .card-poster {
+  height: 300px;
+}
+
+body.no-glow {
+  background: var(--bg);
+}
+
+body.no-animations *,
+body.no-animations .card:hover {
+  transition: none !important;
+  transform: none !important;
+  animation: none !important;
+}
+
+body.hide-ratings .rating-pill {
+  display: none !important;
+}
+
+body.hide-badges .card-poster-overlay .badge {
+  display: none !important;
+}
+
+body.hide-cosmetics .user-nick-text {
+  color: var(--text) !important;
+}
+
+body.hide-cosmetics .user-avatar-img,
+body.hide-cosmetics .avatar-frame-wrap {
+  border-color: var(--border) !important;
+  box-shadow: none !important;
+  animation: none !important;
+}
+
+.frame-glow {
+  box-shadow: 0 0 14px var(--frame-color, var(--accent));
+}
+
+.frame-rainbow {
+  border-color: #ec4899 !important;
+  animation: kirokuRainbow 4s linear infinite;
+}
+
+@keyframes kirokuRainbow {
+  0% { box-shadow: 0 0 12px #f43f5e; border-color: #f43f5e !important; }
+  33% { box-shadow: 0 0 12px #22c55e; border-color: #22c55e !important; }
+  66% { box-shadow: 0 0 12px #38bdf8; border-color: #38bdf8 !important; }
+  100% { box-shadow: 0 0 12px #f43f5e; border-color: #f43f5e !important; }
+}
+
 .site-footer {
   border-top: 1px solid var(--border);
   padding: 24px 0;

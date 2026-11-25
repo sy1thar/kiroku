@@ -238,7 +238,7 @@ async function adminImportMoreChars(btn, mediaId) {
     const res = await fetch(`/api/admin/media/${mediaId}/import-characters`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ count: 12 }),
+      body: JSON.stringify({ count: 12, locale: "{{ locale }}" }),
     });
     const data = await res.json();
     if (!res.ok) {

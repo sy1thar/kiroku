@@ -61,7 +61,10 @@ def clean_html_markup(text: str | None) -> str:
         return ""
     text = re.sub(r"<br\s*/?>", "\n", text, flags=re.IGNORECASE)
     text = re.sub(r"<[^>]+>", "", text)
-    # Strip AniList spoiler markers ~!...!~ into readable inline text or clean brackets
+    # Convert AniList markdown links [Name](url) -> Name and __label__ -> label
+    text = re.sub(r"\[([^\]]+)\]\(https?://[^)]+\)", r"\1", text)
+    text = re.sub(r"__([^_]+)__", r"\1", text)
+    # Strip AniList spoiler markers ~!...!~ into readable brackets
     text = re.sub(r"~!(.+?)!~", r"[\1]", text, flags=re.DOTALL)
     return re.sub(r"\n{3,}", "\n\n", text).strip()
 
@@ -222,6 +225,7 @@ async def upsert_character_from_external(
     image_url: str = "",
     bio_en: str = "",
     name_ru: str = "",
+    bio_ru: str = "",
     translate_bio: bool = True,
     popularity: int = 0,
     media_id: int | None = None,
@@ -282,7 +286,9 @@ async def upsert_character_from_external(
     if not resolved_name_ru:
         resolved_name_ru, _ = await translate_text(canonical_name, "ru")
 
-    if translate_bio and clean_bio:
+    if bio_ru.strip():
+        ru_bio, ru_source = bio_ru.strip(), "ai_draft"
+    elif translate_bio and clean_bio:
         ru_bio, ru_source = await translate_text(clean_bio, "ru")
     else:
         ru_bio, ru_source = clean_bio, "api_raw"

@@ -354,24 +354,30 @@ async def import_batch_from_anilist(
                 ru_desc, _ = await translate_text(clean_html_markup(item.get("description")), "ru")
             return ru_title or canonical, ru_desc
 
-    async def _resolve_char_ru(name: str) -> str:
+    async def _resolve_char_ru(edge: dict) -> tuple[str, str]:
+        node = edge.get("node") or {}
+        name = (node.get("name") or {}).get("full") or ""
+        bio_clean = clean_html_markup(node.get("description") or "")
         async with sem:
             ru_name = await fetch_shikimori_character_ru(name)
             if not ru_name:
                 ru_name, _ = await translate_text(name, "ru")
-            return ru_name or name
+            ru_bio = ""
+            if bio_clean:
+                ru_bio, _ = await translate_text(bio_clean[:1200], "ru")
+            return (ru_name or name), ru_bio
 
     media_ru_list = await asyncio.gather(*[_resolve_media_ru(it) for it in candidates])
 
-    char_names_to_lookup: list[str] = []
+    unique_edges_by_name: dict[str, dict] = {}
     for item in candidates:
         for edge in (item.get("characters") or {}).get("edges") or []:
             node = edge.get("node") or {}
             cname = (node.get("name") or {}).get("full")
-            if cname:
-                char_names_to_lookup.append(cname)
-    unique_names = list(dict.fromkeys(char_names_to_lookup))
-    char_ru_results = await asyncio.gather(*[_resolve_char_ru(n) for n in unique_names])
+            if cname and cname not in unique_edges_by_name:
+                unique_edges_by_name[cname] = edge
+    unique_names = list(unique_edges_by_name.keys())
+    char_ru_results = await asyncio.gather(*[_resolve_char_ru(unique_edges_by_name[n]) for n in unique_names])
     char_ru_map = dict(zip(unique_names, char_ru_results))
 
     imported: list[dict] = []
@@ -417,6 +423,7 @@ async def import_batch_from_anilist(
             raw_role = (edge.get("role") or "SUPPORTING").lower()
             role = "main" if raw_role == "main" else "supporting"
 
+            c_ru_name, c_ru_bio = char_ru_map.get(char_name, ("", ""))
             await upsert_character_from_external(
                 db,
                 provider="anilist",
@@ -427,7 +434,8 @@ async def import_batch_from_anilist(
                 gender=(node.get("gender") or "unknown").lower(),
                 image_url=(node.get("image") or {}).get("large") or "",
                 bio_en=node.get("description") or "",
-                name_ru=char_ru_map.get(char_name, ""),
+                name_ru=c_ru_name,
+                bio_ru=c_ru_bio,
                 translate_bio=False,
                 popularity=node.get("favourites") or 0,
                 media_id=media.id,
@@ -491,7 +499,12 @@ query ($id: Int, $page: Int, $perPage: Int) {
 """
 
 
-async def import_more_characters_for_media(db: Session, media_id: int, count: int = 12) -> dict:
+async def import_more_characters_for_media(
+    db: Session,
+    media_id: int,
+    count: int = 12,
+    locale: str = "ru",
+) -> dict:
     """Batch-import additional unlinked characters directly into an existing media title (Admin)."""
     from app.models import ExternalMapping, Media, MediaCharacter
 
@@ -550,20 +563,27 @@ async def import_more_characters_for_media(db: Session, media_id: int, count: in
                         break
                 page += 1
 
-        sem = asyncio.Semaphore(3)
+        sem = asyncio.Semaphore(4)
 
-        async def _res_name(n: str) -> str:
+        async def _res_char(edge: dict) -> tuple[str, str]:
+            node = edge.get("node") or {}
+            cname = (node.get("name") or {}).get("full", "")
+            cbio = clean_html_markup(node.get("description") or "")
+            if locale != "ru":
+                return cname, cbio
             async with sem:
-                rn = await fetch_shikimori_character_ru(n)
+                rn = await fetch_shikimori_character_ru(cname)
                 if not rn:
-                    rn, _ = await translate_text(n, "ru")
-                return rn or n
+                    rn, _ = await translate_text(cname, "ru")
+                rb = ""
+                if cbio:
+                    rb, _ = await translate_text(cbio[:1400], "ru")
+                return (rn or cname), rb
 
-        raw_names = [((e.get("node") or {}).get("name") or {}).get("full", "") for e in new_edges]
-        ru_names = await asyncio.gather(*[_res_name(n) for n in raw_names])
+        resolved_chars = await asyncio.gather(*[_res_char(e) for e in new_edges])
 
         added: list[dict] = []
-        for edge, ru_name in zip(new_edges, ru_names):
+        for edge, (ru_name, ru_bio) in zip(new_edges, resolved_chars):
             node = edge.get("node") or {}
             cname = (node.get("name") or {}).get("full") or "Unknown"
             va_list = edge.get("voiceActors") or []
@@ -581,14 +601,15 @@ async def import_more_characters_for_media(db: Session, media_id: int, count: in
                 gender=(node.get("gender") or "unknown").lower(),
                 image_url=(node.get("image") or {}).get("large") or "",
                 bio_en=node.get("description") or "",
-                name_ru=ru_name,
-                translate_bio=False,
+                name_ru=ru_name if locale == "ru" else cname,
+                bio_ru=ru_bio if locale == "ru" else "",
+                translate_bio=(locale == "ru"),
                 popularity=node.get("favourites") or 0,
                 media_id=media.id,
                 role=role,
                 voice_actor=va_name,
             )
-            added.append({"id": ch.id, "slug": ch.slug, "name": ru_name})
+            added.append({"id": ch.id, "slug": ch.slug, "name": ru_name if locale == "ru" else cname})
 
         db.commit()
         return {"media_id": media.id, "added_count": len(added), "characters": added}

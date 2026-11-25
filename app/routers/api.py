@@ -6,7 +6,19 @@ from sqlalchemy import desc, func, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.database import get_db
-from app.models import Character, CharacterTranslation, Media, MediaTranslation, Revision, User
+from app.i18n import slugify
+from app.models import (
+    Character,
+    CharacterTrait,
+    CharacterTranslation,
+    CustomRole,
+    Media,
+    MediaTranslation,
+    Revision,
+    Trait,
+    User,
+    UserCustomRole,
+)
 from app.schemas import (
     AccountProfileUpdateRequest,
     AdminCharacterUpdateRequest,
@@ -14,7 +26,10 @@ from app.schemas import (
     AdminMediaUpdateRequest,
     AdminRoleUpdateRequest,
     AdminUsernameRoleRequest,
+    AssignCustomRoleRequest,
     BatchImportRequest,
+    CharacterAppearanceUpdateRequest,
+    CustomRoleCreateRequest,
     ImportQueryRequest,
     LoginRequest,
     PasswordChangeRequest,
@@ -259,6 +274,59 @@ def api_change_password(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"status": "password_updated"}
+
+
+@router.patch("/characters/{character_id}/appearance")
+def api_update_character_appearance(
+    character_id: int,
+    payload: CharacterAppearanceUpdateRequest,
+    db: Session = Depends(get_db),
+):
+    """Allow any user to contribute character appearance attributes (hair, eyes, length)."""
+    ch = db.get(Character, character_id)
+    if not ch:
+        raise HTTPException(status_code=404, detail="Character not found")
+    ch.hair_color = payload.hair_color
+    ch.eye_color = payload.eye_color
+    ch.hair_length = payload.hair_length
+    db.commit()
+    return {
+        "id": ch.id,
+        "hair_color": ch.hair_color,
+        "eye_color": ch.eye_color,
+        "hair_length": ch.hair_length,
+    }
+
+
+@router.post("/traits/custom")
+def api_add_custom_trait(
+    character_id: int = Query(...),
+    name: str = Query(..., min_length=2, max_length=60),
+    category: str = Query(default="appearance", pattern="^(appearance|personality|ability)$"),
+    request: Request = None,
+    response: Response = None,
+    db: Session = Depends(get_db),
+):
+    ch = db.get(Character, character_id)
+    if not ch:
+        raise HTTPException(status_code=404, detail="Character not found")
+    t_slug = slugify(name)
+    trait = db.scalar(select(Trait).where(Trait.slug == t_slug))
+    if not trait:
+        clean_name = name.strip()
+        trait = Trait(slug=t_slug, category=category, name_en=clean_name, name_ru=clean_name)
+        db.add(trait)
+        db.flush()
+    link = db.scalar(
+        select(CharacterTrait).where(
+            CharacterTrait.character_id == ch.id,
+            CharacterTrait.trait_id == trait.id,
+        )
+    )
+    if not link:
+        db.add(CharacterTrait(character_id=ch.id, trait_id=trait.id, votes_count=1))
+        db.commit()
+    return {"trait_slug": trait.slug, "name": trait.name_ru, "category": trait.category}
 
 
 @router.post("/traits/vote")
@@ -566,7 +634,9 @@ async def api_admin_import_media_characters(
 ):
     require_admin(request, db)
     try:
-        res = await import_more_characters_for_media(db, media_id, count=payload.count)
+        res = await import_more_characters_for_media(
+            db, media_id, count=payload.count, locale=payload.locale
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except httpx.HTTPError as exc:
@@ -576,7 +646,9 @@ async def api_admin_import_media_characters(
 
 @router.post("/admin/translate-missing")
 async def api_admin_translate_missing(request: Request, db: Session = Depends(get_db)):
-    """Localize up to 15 untranslated titles/descriptions & 30 characters per click to Russian."""
+    """Localize up to 15 untranslated titles/descriptions & 20 characters (names + bios) per click."""
+    from app.services.importers.base import clean_html_markup
+
     require_admin(request, db)
     fixed_media = 0
     fixed_chars = 0
@@ -608,7 +680,7 @@ async def api_admin_translate_missing(request: Request, db: Session = Depends(ge
                 ru_tr.synopsis = ru_desc
                 ru_tr.source = "community_verified"
             elif en_tr and en_tr.synopsis:
-                tr_syn, src = await translate_text(en_tr.synopsis, "ru")
+                tr_syn, src = await translate_text(clean_html_markup(en_tr.synopsis), "ru")
                 if tr_syn and _has_cyrillic(tr_syn):
                     ru_tr.synopsis = tr_syn
                     ru_tr.source = src
@@ -616,20 +688,140 @@ async def api_admin_translate_missing(request: Request, db: Session = Depends(ge
 
     char_rows = db.scalars(select(Character).options(selectinload(Character.translations))).all()
     for c in char_rows:
-        if fixed_chars >= 30:
+        if fixed_chars >= 20:
             break
         ru_tr = next((t for t in c.translations if t.locale == "ru"), None)
-        if not ru_tr or _has_cyrillic(ru_tr.name):
+        en_tr = next((t for t in c.translations if t.locale == "en"), None)
+        if not ru_tr:
             continue
-        rn = await fetch_shikimori_character_ru(c.canonical_name)
-        if not rn:
-            rn, _ = await translate_text(c.canonical_name, "ru")
-        if rn and _has_cyrillic(rn):
-            ru_tr.name = rn
-            fixed_chars += 1
+        needs_name = not _has_cyrillic(ru_tr.name)
+        needs_bio = bool(en_tr and en_tr.bio and not _has_cyrillic(ru_tr.bio))
+        if not needs_name and not needs_bio:
+            continue
+        if needs_name:
+            rn = await fetch_shikimori_character_ru(c.canonical_name)
+            if not rn:
+                rn, _ = await translate_text(c.canonical_name, "ru")
+            if rn and _has_cyrillic(rn):
+                ru_tr.name = rn
+        if needs_bio and en_tr and en_tr.bio:
+            clean_en_bio = clean_html_markup(en_tr.bio)
+            rb, src = await translate_text(clean_en_bio[:1400], "ru")
+            if rb and _has_cyrillic(rb):
+                ru_tr.bio = rb
+                ru_tr.source = src
+        fixed_chars += 1
 
     db.commit()
     return {"translated_media": fixed_media, "translated_characters": fixed_chars}
+
+
+@router.get("/admin/custom-roles")
+def api_admin_list_custom_roles(request: Request, db: Session = Depends(get_db)):
+    require_admin(request, db)
+    roles = list(db.scalars(select(CustomRole).order_by(CustomRole.id)).all())
+    return {
+        "items": [
+            {
+                "id": r.id,
+                "name": r.name,
+                "badge_color": r.badge_color,
+                "nick_color": r.nick_color,
+                "avatar_frame": r.avatar_frame,
+                "frame_color": r.frame_color,
+            }
+            for r in roles
+        ]
+    }
+
+
+@router.post("/admin/custom-roles")
+def api_admin_create_custom_role(
+    payload: CustomRoleCreateRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    require_admin(request, db)
+    clean_name = payload.name.strip()
+    existing = db.scalar(select(CustomRole).where(func.lower(CustomRole.name) == clean_name.lower()))
+    if existing:
+        raise HTTPException(status_code=400, detail="Custom role with this name already exists")
+    role = CustomRole(
+        name=clean_name,
+        badge_color=payload.badge_color.strip(),
+        nick_color=payload.nick_color.strip(),
+        avatar_frame=payload.avatar_frame,
+        frame_color=payload.frame_color.strip(),
+    )
+    db.add(role)
+    db.commit()
+    db.refresh(role)
+    return {
+        "id": role.id,
+        "name": role.name,
+        "badge_color": role.badge_color,
+        "nick_color": role.nick_color,
+        "avatar_frame": role.avatar_frame,
+        "frame_color": role.frame_color,
+    }
+
+
+@router.delete("/admin/custom-roles/{role_id}")
+def api_admin_delete_custom_role(role_id: int, request: Request, db: Session = Depends(get_db)):
+    require_admin(request, db)
+    role = db.get(CustomRole, role_id)
+    if not role:
+        raise HTTPException(status_code=404, detail="Custom role not found")
+    db.delete(role)
+    db.commit()
+    return {"deleted": role_id}
+
+
+@router.post("/admin/custom-roles/assign")
+def api_admin_assign_custom_role(
+    payload: AssignCustomRoleRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    require_admin(request, db)
+    user = db.scalar(select(User).where(func.lower(User.username) == payload.username.strip().lower()))
+    if not user:
+        raise HTTPException(status_code=404, detail=f"User '{payload.username}' not found")
+    role = db.get(CustomRole, payload.role_id)
+    if not role:
+        raise HTTPException(status_code=404, detail="Custom role not found")
+    existing = db.scalar(
+        select(UserCustomRole).where(
+            UserCustomRole.user_id == user.id,
+            UserCustomRole.role_id == role.id,
+        )
+    )
+    if not existing:
+        db.add(UserCustomRole(user_id=user.id, role_id=role.id))
+        db.commit()
+    return {"username": user.username, "role_id": role.id, "role_name": role.name}
+
+
+@router.post("/admin/custom-roles/unassign")
+def api_admin_unassign_custom_role(
+    payload: AssignCustomRoleRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    require_admin(request, db)
+    user = db.scalar(select(User).where(func.lower(User.username) == payload.username.strip().lower()))
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    link = db.scalar(
+        select(UserCustomRole).where(
+            UserCustomRole.user_id == user.id,
+            UserCustomRole.role_id == payload.role_id,
+        )
+    )
+    if link:
+        db.delete(link)
+        db.commit()
+    return {"username": user.username, "removed_role_id": payload.role_id}
 
 
 @router.delete("/admin/characters/{character_id}")

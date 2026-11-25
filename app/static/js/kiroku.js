@@ -12,6 +12,34 @@
 
   window.kirokuToast = showToast;
 
+  function applySitePrefs() {
+    const accent = localStorage.getItem("kiroku_accent");
+    if (accent) {
+      document.documentElement.style.setProperty("--accent", accent);
+      document.documentElement.style.setProperty("--accent-glow", accent + "40");
+    } else {
+      document.documentElement.style.removeProperty("--accent");
+      document.documentElement.style.removeProperty("--accent-glow");
+    }
+    const radius = localStorage.getItem("kiroku_radius");
+    if (radius) {
+      document.documentElement.style.setProperty("--radius", radius);
+    } else {
+      document.documentElement.style.removeProperty("--radius");
+    }
+    const density = localStorage.getItem("kiroku_density") || (localStorage.getItem("kiroku_compact_cards") === "1" ? "compact" : "normal");
+    document.body.classList.toggle("compact-cards", density === "compact");
+    document.body.classList.toggle("large-cards", density === "large");
+    document.body.classList.toggle("no-glow", localStorage.getItem("kiroku_glow") === "0");
+    document.body.classList.toggle("no-animations", localStorage.getItem("kiroku_animations") === "0");
+    document.body.classList.toggle("hide-ratings", localStorage.getItem("kiroku_show_ratings") === "0");
+    document.body.classList.toggle("hide-badges", localStorage.getItem("kiroku_show_badges") === "0");
+    document.body.classList.toggle("hide-cosmetics", localStorage.getItem("kiroku_show_cosmetics") === "0");
+  }
+
+  window.applyKirokuSitePrefs = applySitePrefs;
+  applySitePrefs();
+
   // Keyboard shortcuts: / or Ctrl+K
   document.addEventListener("keydown", (e) => {
     if (!input) return;
@@ -31,7 +59,8 @@
     input.addEventListener("keydown", (e) => {
       if (e.key === "Enter" && input.value.trim().length > 0) {
         e.preventDefault();
-        window.location.href = `/${locale}/catalog?q=${encodeURIComponent(input.value.trim())}`;
+        const targetPage = localStorage.getItem("kiroku_search_target") === "characters" ? "characters" : "catalog";
+        window.location.href = `/${locale}/${targetPage}?q=${encodeURIComponent(input.value.trim())}`;
       }
     });
 
@@ -116,11 +145,6 @@
       }
     });
   });
-
-  // Apply saved site display preferences
-  if (localStorage.getItem("kiroku_compact_cards") === "1") {
-    document.body.classList.add("compact-cards");
-  }
 
   // Anti-Spoiler Toggle + Auto-Reveal preference
   const spoilerBtn = document.getElementById("spoiler-toggle-btn");

@@ -3,10 +3,10 @@ import hmac
 import secrets
 from fastapi import HTTPException, Request
 from sqlalchemy import func, or_, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from app.config import get_settings
-from app.models import User
+from app.models import User, UserCustomRole
 from app.roles import USER_ROLES_TABLE
 
 SESSION_COOKIE_NAME = "kiroku_session"
@@ -68,7 +68,11 @@ def get_current_user(request: Request, db: Session) -> User | None:
     user_id = verify_session_token(request.cookies.get(SESSION_COOKIE_NAME))
     if not user_id:
         return None
-    user = db.get(User, user_id)
+    user = db.scalar(
+        select(User)
+        .where(User.id == user_id)
+        .options(selectinload(User.custom_role_links).selectinload(UserCustomRole.role))
+    )
     if user:
         override = _resolve_role_override(user.username, user.email)
         if override and user.role != override:

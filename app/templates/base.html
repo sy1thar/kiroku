@@ -51,12 +51,18 @@
       </div>
 
       {% if current_user %}
+      {% set primary_crole = current_user.custom_role_links[0].role if current_user.custom_role_links else None %}
       <div style="display:flex; align-items:center; gap:8px;">
         <a class="badge" href="/{{ locale }}/profile" style="gap:7px; padding:4px 10px;" title="{{ ui.nav_profile }}">
           {% if current_user.avatar_url %}
-          <img src="{{ current_user.avatar_url }}" alt="{{ current_user.username }}" style="width:20px; height:20px; border-radius:999px; object-fit:cover;" />
+          <img
+            src="{{ current_user.avatar_url }}"
+            alt="{{ current_user.username }}"
+            class="user-avatar-img {% if primary_crole %}frame-{{ primary_crole.avatar_frame }}{% endif %}"
+            style="width:22px; height:22px; border-radius:999px; object-fit:cover; {% if primary_crole and primary_crole.avatar_frame != 'none' %}border:2px solid {{ primary_crole.frame_color }};{% endif %}"
+          />
           {% endif %}
-          <span>{{ current_user.username }}</span>
+          <span class="user-nick-text" style="{% if primary_crole %}color:{{ primary_crole.nick_color }};{% endif %}">{{ current_user.username }}</span>
           {% if current_user.role == 'admin' %}
           <span style="color:#fcd34d;">★</span>
           {% elif current_user.role == 'moderator' %}

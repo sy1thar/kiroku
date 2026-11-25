@@ -435,6 +435,23 @@ def api_admin_list_users(request: Request, db: Session = Depends(get_db)):
     }
 
 
+@router.post("/admin/users/by-username/role")
+def api_admin_set_role_by_username(
+    payload: AdminUsernameRoleRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    admin_user = require_admin(request, db)
+    target = db.scalar(select(User).where(func.lower(User.username) == payload.username.strip().lower()))
+    if not target:
+        raise HTTPException(status_code=404, detail=f"User '{payload.username}' not found")
+    if target.id == admin_user.id and payload.role != "admin":
+        raise HTTPException(status_code=400, detail="Cannot demote yourself")
+    target.role = payload.role
+    db.commit()
+    return {"id": target.id, "username": target.username, "role": target.role}
+
+
 @router.post("/admin/users/{user_id}/role")
 def api_admin_set_user_role(
     user_id: int,
@@ -538,23 +555,6 @@ def api_admin_update_character(
     tr.source = "community_verified"
     db.commit()
     return {"id": ch.id, "slug": ch.slug, "status": "updated"}
-
-
-@router.post("/admin/users/by-username/role")
-def api_admin_set_role_by_username(
-    payload: AdminUsernameRoleRequest,
-    request: Request,
-    db: Session = Depends(get_db),
-):
-    admin_user = require_admin(request, db)
-    target = db.scalar(select(User).where(func.lower(User.username) == payload.username.strip().lower()))
-    if not target:
-        raise HTTPException(status_code=404, detail=f"User '{payload.username}' not found")
-    if target.id == admin_user.id and payload.role != "admin":
-        raise HTTPException(status_code=400, detail="Cannot demote yourself")
-    target.role = payload.role
-    db.commit()
-    return {"id": target.id, "username": target.username, "role": target.role}
 
 
 @router.post("/admin/media/{media_id}/import-characters")

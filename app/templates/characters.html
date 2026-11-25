@@ -1,0 +1,115 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="section-head" style="margin-top:0;">
+  <h2>{{ ui.find_character }}</h2>
+</div>
+
+<form class="filter-panel" method="get" action="/{{ locale }}/characters">
+  <div class="field-group" style="min-width:210px;">
+    <label>{{ ui.char_search_label }}</label>
+    <input type="search" name="q" value="{{ selected_q }}" placeholder="{{ ui.char_search_placeholder }}" />
+  </div>
+
+  <div class="field-group">
+    <label>{{ ui.medium }}</label>
+    <select name="type">
+      <option value="">{{ ui.all_types }}</option>
+      {% for key, labels in media_type_labels.items() %}
+      <option value="{{ key }}" {% if selected_type == key %}selected{% endif %}>{{ labels[locale] }}</option>
+      {% endfor %}
+    </select>
+  </div>
+
+  <div class="field-group">
+    <label>{{ ui.gender }}</label>
+    <select name="gender">
+      <option value="">—</option>
+      {% for key, labels in gender_labels.items() %}
+      <option value="{{ key }}" {% if selected_gender == key %}selected{% endif %}>{{ labels[locale] }}</option>
+      {% endfor %}
+    </select>
+  </div>
+
+  <div class="field-group">
+    <label>{{ ui.hair_color }}</label>
+    <select name="hair">
+      <option value="">—</option>
+      {% for key, labels in color_labels.items() %}
+      <option value="{{ key }}" {% if selected_hair == key %}selected{% endif %}>{{ labels[locale] }}</option>
+      {% endfor %}
+    </select>
+  </div>
+
+  <div class="field-group">
+    <label>{{ ui.eye_color }}</label>
+    <select name="eye">
+      <option value="">—</option>
+      {% for key, labels in color_labels.items() %}
+      <option value="{{ key }}" {% if selected_eye == key %}selected{% endif %}>{{ labels[locale] }}</option>
+      {% endfor %}
+    </select>
+  </div>
+
+  <div class="field-group">
+    <label>{{ ui.mbti }}</label>
+    <select name="mbti">
+      <option value="">—</option>
+      {% for code in mbti_options %}
+      <option value="{{ code }}" {% if selected_mbti == code %}selected{% endif %}>{{ code }}</option>
+      {% endfor %}
+    </select>
+  </div>
+
+  <div class="field-group">
+    <label>{{ ui.trait }}</label>
+    <select name="trait">
+      <option value="">—</option>
+      {% for cat_key, cat_label in [('appearance', 'Внешность' if locale == 'ru' else 'Appearance'), ('personality', 'Характер' if locale == 'ru' else 'Personality'), ('ability', 'Способности' if locale == 'ru' else 'Abilities')] %}
+      <optgroup label="{{ cat_label }}">
+        {% for tr in traits if tr.category == cat_key %}
+        <option value="{{ tr.slug }}" {% if selected_trait == tr.slug %}selected{% endif %}>{{ tr.name_ru if locale == "ru" else tr.name_en }}</option>
+        {% endfor %}
+      </optgroup>
+      {% endfor %}
+    </select>
+  </div>
+
+  <button class="btn btn-primary" type="submit">{{ ui.filter_apply }}</button>
+  <a class="btn btn-secondary" href="/{{ locale }}/characters">{{ ui.filter_reset }}</a>
+</form>
+
+{% if characters %}
+<div class="grid-4">
+  {% for c in characters %}
+  {% set ctr = pick_char_tr(c) %}
+  <a class="card" href="/{{ locale }}/characters/{{ c.slug }}">
+    <div class="card-poster">
+      <div class="monogram">{{ c.canonical_name[:2].upper() }}</div>
+      {% if c.image_url %}
+      <img src="{{ c.image_url }}" alt="{{ ctr.name if ctr else c.canonical_name }}" loading="lazy" onerror="this.style.display='none'" />
+      {% endif %}
+      <div class="card-poster-overlay">
+        {% if c.mbti %}<span class="badge">{{ c.mbti }}</span>{% endif %}
+        {% if c.hair_color != "unknown" %}
+        <span class="badge">{{ color_labels.get(c.hair_color, {}).get(locale, c.hair_color) }}</span>
+        {% elif c.gender != "unknown" %}
+        <span class="badge">{{ gender_labels.get(c.gender, {}).get(locale, c.gender) }}</span>
+        {% endif %}
+      </div>
+    </div>
+    <div class="card-body">
+      <div class="card-title">{{ ctr.name if ctr else c.canonical_name }}</div>
+      <div class="card-meta">
+        {% if c.eye_color != "unknown" %}
+        <span>{{ color_labels.get(c.eye_color, {}).get(locale, c.eye_color) }} {{ "глаза" if locale == "ru" else "eyes" }}</span>
+        {% endif %}
+        {% if c.archetype %}<span>{% if c.eye_color != "unknown" %}· {% endif %}{{ c.archetype }}</span>{% endif %}
+      </div>
+    </div>
+  </a>
+  {% endfor %}
+</div>
+{% else %}
+<div class="panel">{{ ui.no_results }}</div>
+{% endif %}
+{% endblock %}

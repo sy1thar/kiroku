@@ -1,0 +1,112 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="section-head" style="margin-top:0;">
+  <div>
+    <h1 style="margin:0 0 6px;">{{ ui.import_title }}</h1>
+    <p style="margin:0; color:var(--muted);">{{ ui.import_subtitle }}</p>
+  </div>
+</div>
+
+<div class="panel">
+  <h3 style="margin-top:0;">{{ "Пакетный импорт по 15 тайтлов (по страницам без повторов)" if locale == "ru" else "Continuous Batch Import (15 titles per step)" }}</h3>
+  <p style="color:var(--muted); font-size:0.9rem; margin-top:0;">
+    {{ "Каждый клик загружает следующие 15 самых популярных тайтлов и их персонажей с AniList, сохраняя курсор страницы в базе." if locale == "ru" else "Each click fetches the next 15 titles and characters from AniList while advancing the saved page cursor." }}
+  </p>
+  <div style="display:flex; flex-wrap:wrap; gap:10px;">
+    {% for cat_key, cat_label in [('anime', 'Аниме' if locale == 'ru' else 'Anime'), ('manga', 'Манга' if locale == 'ru' else 'Manga'), ('manhwa', 'Манхва' if locale == 'ru' else 'Manhwa')] %}
+    {% set cur = cursors.get(cat_key) %}
+    <button type="button" class="btn btn-primary" onclick="runBatchImport('{{ cat_key }}', 15)">
+      +15 {{ cat_label }} ({{ "стр." if locale == "ru" else "page" }} {{ cur.next_page if cur else 1 }})
+    </button>
+    {% endfor %}
+  </div>
+</div>
+
+<div class="panel">
+  <h3 style="margin-top:0;">{{ "Точечный поиск и импорт" if locale == "ru" else "Targeted Query Import" }}</h3>
+  <form id="live-import-form" class="filter-panel" style="margin-bottom:0; border:none; padding:0; background:transparent;">
+    <div class="field-group">
+      <label>{{ "Источник API" if locale == "ru" else "API Provider" }}</label>
+      <select name="provider">
+        <option value="anilist">AniList GraphQL (Anime, Manga, Manhwa, Novels)</option>
+        <option value="vndb">VNDB Kana v2 (Visual Novels)</option>
+        <option value="igdb">IGDB / Twitch (Video Games {% if not igdb_ready %}— needs keys{% endif %})</option>
+      </select>
+    </div>
+    <div class="field-group">
+      <label>{{ "Поисковый запрос" if locale == "ru" else "Search Query" }}</label>
+      <input type="text" name="query" placeholder="Frieren, Chainsaws, Elden Ring, Cyberpunk..." required />
+    </div>
+    <div class="field-group" style="max-width:160px;">
+      <label>{{ "Лимит" if locale == "ru" else "Limit" }}</label>
+      <input type="number" name="limit" min="1" max="15" value="5" />
+    </div>
+    <button class="btn btn-primary" type="submit">{{ "Импортировать в Kiroku" if locale == "ru" else "Import into Kiroku" }}</button>
+  </form>
+</div>
+
+<div id="import-results" class="panel" style="display:none;"></div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function renderImportedBox(data) {
+  const box = document.getElementById("import-results");
+  let html = `<h3>Imported ${data.imported_count} items</h3><div class="grid-3">`;
+  for (const item of data.items) {
+    html += `<a class="card" href="/{{ locale }}/media/${item.slug}">
+      <div class="card-body">
+        <div class="card-title">${item.title}</div>
+        <div class="card-meta">
+          <span class="badge badge-${item.media_type}">${item.media_type}</span>
+          <span>${item.characters_linked} characters linked</span>
+        </div>
+      </div>
+    </a>`;
+  }
+  html += "</div>";
+  box.innerHTML = html;
+}
+
+async function runBatchImport(category, count) {
+  const box = document.getElementById("import-results");
+  box.style.display = "block";
+  box.innerHTML = "{{ 'Пакетная загрузка из AniList...' if locale == 'ru' else 'Batch importing from AniList...' }}";
+  const res = await fetch("/api/import/batch", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ category, count }),
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    box.innerHTML = `<div style="color:#fda4af;">Error: ${data.detail || "Batch import failed"}</div>`;
+    return;
+  }
+  renderImportedBox(data);
+}
+
+document.getElementById("live-import-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const box = document.getElementById("import-results");
+  const fd = new FormData(e.target);
+  box.style.display = "block";
+  box.innerHTML = "{{ 'Загрузка из внешнего API...' if locale == 'ru' else 'Fetching from upstream API...' }}";
+
+  const res = await fetch("/api/import", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      provider: fd.get("provider"),
+      query: fd.get("query"),
+      limit: Number(fd.get("limit") || 5),
+    }),
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    box.innerHTML = `<div style="color:#fda4af;">Error: ${data.detail || "Import failed"}</div>`;
+    return;
+  }
+  renderImportedBox(data);
+});
+</script>
+{% endblock %}

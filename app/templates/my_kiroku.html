@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="section-head" style="margin-top:0;">
+  <h2>{{ ui.nav_lists }}{% if current_user %} · {{ current_user.username }}{% endif %}</h2>
+  {% if not current_user %}
+  <div style="display:flex; gap:8px;">
+    <a class="btn btn-secondary btn-sm" href="/{{ locale }}/login">{{ ui.nav_login }}</a>
+    <a class="btn btn-primary btn-sm" href="/{{ locale }}/register">{{ ui.nav_register }}</a>
+  </div>
+  {% endif %}
+</div>
+
+{% if not current_user %}
+<div class="panel" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
+  <span style="color:var(--muted);">
+    {{ "Сейчас показан гостевой демо-список. Зарегистрируйтесь или войдите, чтобы вести свой личный трекер Kiroku." if locale == "ru" else "Viewing guest demo list. Register or sign in to keep your personal Kiroku list." }}
+  </span>
+  <a class="btn btn-primary btn-sm" href="/{{ locale }}/register">{{ ui.nav_register }}</a>
+</div>
+{% endif %}
+
+{% if entries %}
+<div class="grid-4">
+  {% for entry in entries %}
+  {% set m = entry.media %}
+  {% set tr = pick_media_tr(m) %}
+  <a class="card" href="/{{ locale }}/media/{{ m.slug }}">
+    <div class="card-poster">
+      <div class="monogram">{{ m.canonical_title[:2].upper() }}</div>
+      {% if m.cover_url %}
+      <img src="{{ m.cover_url }}" alt="{{ tr.title if tr else m.canonical_title }}" loading="lazy" onerror="this.style.display='none'" />
+      {% endif %}
+      <div class="card-poster-overlay">
+        <span class="badge badge-{{ m.media_type }}">{{ media_type_labels.get(m.media_type, {}).get(locale, m.media_type) }}</span>
+        {% if entry.score %}<span class="rating-pill">★ {{ entry.score }}/10</span>{% endif %}
+      </div>
+    </div>
+    <div class="card-body">
+      <div class="card-title">{{ tr.title if tr else m.canonical_title }}</div>
+      <div class="card-meta">
+        <span class="badge">{{ list_status_labels.get(entry.status, {}).get(locale, entry.status) }}</span>
+        <span>{{ entry.progress_unit }}{% if m.total_units %} / {{ m.total_units }}{% endif %} {{ m.unit_label }}</span>
+        {% if entry.is_favorite %}<span>❤️</span>{% endif %}
+      </div>
+      {% if entry.notes %}
+      <div style="font-size:0.83rem; color:var(--muted);">{{ entry.notes }}</div>
+      {% endif %}
+    </div>
+  </a>
+  {% endfor %}
+</div>
+{% else %}
+<div class="panel">
+  {{ "Ваш список пока пуст. Откройте любой тайтл в каталоге и нажмите «Сохранить в Kiroku»." if locale == "ru" else "Your list is empty. Open any title in the catalog and save it to Kiroku." }}
+</div>
+{% endif %}
+{% endblock %}

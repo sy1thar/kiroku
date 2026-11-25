@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="hero" style="margin-bottom:24px;">
+  <h1>Kiroku (記録) — {{ ui.brand_tagline }}</h1>
+  <p>
+    {% if locale == "ru" %}
+      Единая открытая энциклопедия и личный трекер, объединяющая аниме, мангу, манхву, видеоигры и визуальные новеллы.
+      Вместо десятков разрозненных баз — единый кросс-медиа граф персонажей, поиск по внешности и психотипам, защита от спойлеров и вики-редактор.
+    {% else %}
+      A unified cross-media encyclopedia and personal tracker connecting anime, manga, manhwa, video games, and visual novels.
+      One character graph across adaptations, appearance & MBTI discovery, anti-spoiler protection, and community wiki revisions.
+    {% endif %}
+  </p>
+  <div class="stats-strip">
+    <span><strong>{{ stats.media_count }}</strong> {{ "тайтлов" if locale == "ru" else "titles" }}</span>
+    <span><strong>{{ stats.char_count }}</strong> {{ "персонажей" if locale == "ru" else "characters" }}</span>
+    <span><strong>{{ stats.franchise_count }}</strong> {{ "вселенных" if locale == "ru" else "universes" }}</span>
+  </div>
+</section>
+
+<div class="grid-3">
+  <div class="panel">
+    <h3>{{ "Источники данных и API" if locale == "ru" else "Data Sources & APIs" }}</h3>
+    <p style="color:var(--muted); font-size:0.92rem;">
+      {% if locale == "ru" %}
+        Автоматический импорт и дедупликация тайтлов и героев без дублей между адаптациями:
+      {% else %}
+        On-demand import and external-ID deduplication across global media databases:
+      {% endif %}
+    </p>
+    <div style="display:flex; flex-wrap:wrap; gap:8px;">
+      <span class="badge badge-anime">AniList GraphQL</span>
+      <span class="badge badge-vn">VNDB Kana v2</span>
+      <span class="badge badge-game">IGDB (Twitch)</span>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h3>{{ "Поиск и фишки энциклопедии" if locale == "ru" else "Discovery & Wiki Features" }}</h3>
+    <ul style="margin:0; padding-left:18px; color:var(--muted); font-size:0.92rem; display:grid; gap:6px;">
+      <li>{{ "Кросс-скриптовый поиск (кириллица ↔ латиница, Меилисерч-ready)" if locale == "ru" else "Cross-script fuzzy search (Cyrillic ↔ Latin, Meilisearch-ready)" }}</li>
+      <li>{{ "Фильтры персонажей по волосам, глазам, MBTI и тегам" if locale == "ru" else "Character finder by hair, eyes, MBTI, and votable traits" }}</li>
+      <li>{{ "Анти-спойлер блюр сюжетного лора" if locale == "ru" else "Anti-spoiler guard for late-story lore" }}</li>
+      <li>{{ "Предложение вики-правок с очередью модерации" if locale == "ru" else "Community wiki revision proposals & moderation" }}</li>
+    </ul>
+  </div>
+
+  <div class="panel">
+    <h3>{{ "Технологический стек" if locale == "ru" else "Architecture Stack" }}</h3>
+    <ul style="margin:0; padding-left:18px; color:var(--muted); font-size:0.92rem; display:grid; gap:6px;">
+      <li>FastAPI + SSR Jinja2 (RU / EN, hreflang SEO)</li>
+      <li>SQLAlchemy 2.0 (SQLite / PostgreSQL + pgvector)</li>
+      <li>Meilisearch / Cross-Script Fuzzy Engine</li>
+      <li>Cloudflare R2 / DeepL / OpenAI Translation Hooks</li>
+    </ul>
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="hero">
+  <h1>{{ ui.hero_title }}</h1>
+  <p>{{ ui.hero_subtitle }}</p>
+  <div class="hero-actions">
+    <a class="btn btn-primary" href="/{{ locale }}/catalog">{{ ui.explore_media }}</a>
+    <a class="btn btn-secondary" href="/{{ locale }}/characters">{{ ui.find_character }}</a>
+    <a class="btn btn-secondary" href="/{{ locale }}/import">{{ ui.nav_import }}</a>
+  </div>
+  <div class="stats-strip">
+    <span><strong>{{ stats.media_count }}</strong> {{ "тайтлов в базе" if locale == "ru" else "titles indexed" }}</span>
+    <span><strong>{{ stats.char_count }}</strong> {{ "персонажей" if locale == "ru" else "characters" }}</span>
+  </div>
+</section>
+
+<div class="section-head">
+  <h2>{{ ui.trending_media }}</h2>
+  <a class="nav-link" href="/{{ locale }}/catalog">{{ ui.explore_media }} →</a>
+</div>
+<div class="grid-4">
+  {% for m in trending_media %}
+  {% set tr = pick_media_tr(m) %}
+  <a class="card" href="/{{ locale }}/media/{{ m.slug }}">
+    <div class="card-poster">
+      <div class="monogram">{{ m.canonical_title[:2].upper() }}</div>
+      {% if m.cover_url %}
+      <img src="{{ m.cover_url }}" alt="{{ tr.title if tr else m.canonical_title }}" loading="lazy" onerror="this.style.display='none'" />
+      {% endif %}
+      <div class="card-poster-overlay">
+        <span class="badge badge-{{ m.media_type }}">{{ media_type_labels.get(m.media_type, {}).get(locale, m.media_type) }}</span>
+        {% if m.rating %}<span class="rating-pill">★ {{ m.rating }}</span>{% endif %}
+      </div>
+    </div>
+    <div class="card-body">
+      <div class="card-title">{{ tr.title if tr else m.canonical_title }}</div>
+      <div class="card-meta">
+        {% if m.release_year %}<span>{{ m.release_year }}</span>{% endif %}
+        {% if m.total_units %}<span>{{ m.total_units }} {{ m.unit_label }}</span>{% endif %}
+      </div>
+    </div>
+  </a>
+  {% endfor %}
+</div>
+
+<div class="section-head">
+  <h2>{{ ui.featured_characters }}</h2>
+  <a class="nav-link" href="/{{ locale }}/characters">{{ ui.find_character }} →</a>
+</div>
+<div class="grid-4">
+  {% for c in featured_chars %}
+  {% set ctr = pick_char_tr(c) %}
+  <a class="card" href="/{{ locale }}/characters/{{ c.slug }}">
+    <div class="card-poster">
+      <div class="monogram">{{ c.canonical_name[:2].upper() }}</div>
+      {% if c.image_url %}
+      <img src="{{ c.image_url }}" alt="{{ ctr.name if ctr else c.canonical_name }}" loading="lazy" onerror="this.style.display='none'" />
+      {% endif %}
+      <div class="card-poster-overlay">
+        {% if c.mbti %}<span class="badge">{{ c.mbti }}</span>{% endif %}
+        {% if c.hair_color != "unknown" %}
+        <span class="badge">{{ color_labels.get(c.hair_color, {}).get(locale, c.hair_color) }}</span>
+        {% elif c.gender != "unknown" %}
+        <span class="badge">{{ gender_labels.get(c.gender, {}).get(locale, c.gender) }}</span>
+        {% endif %}
+      </div>
+    </div>
+    <div class="card-body">
+      <div class="card-title">{{ ctr.name if ctr else c.canonical_name }}</div>
+      <div class="card-meta">
+        {% if c.archetype %}<span>{{ c.archetype }}</span>{% endif %}
+      </div>
+    </div>
+  </a>
+  {% endfor %}
+</div>
+{% endblock %}

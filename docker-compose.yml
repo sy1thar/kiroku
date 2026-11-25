@@ -1,0 +1,43 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB: kiroku
+      POSTGRES_USER: kiroku
+      POSTGRES_PASSWORD: kiroku_dev_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  meilisearch:
+    image: getmeili/meilisearch:v1.11
+    environment:
+      MEILI_ENV: development
+      MEILI_MASTER_KEY: kiroku_meili_master_key
+    ports:
+      - "7700:7700"
+    volumes:
+      - meilidata:/meili_data
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+  kiroku:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql+psycopg://kiroku:kiroku_dev_password@postgres:5432/kiroku
+      MEILISEARCH_URL: http://meilisearch:7700
+      MEILISEARCH_API_KEY: kiroku_meili_master_key
+    depends_on:
+      - postgres
+      - meilisearch
+      - redis
+
+volumes:
+  pgdata:
+  meilidata:

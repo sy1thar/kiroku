@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="section-head" style="margin-top:0;">
+  <h2>{{ ui.moderation_title }}</h2>
+</div>
+
+{% if revisions %}
+<div style="display:grid; gap:14px;">
+  {% for rev in revisions %}
+  <div class="panel" id="rev-{{ rev.id }}" style="margin-bottom:0;">
+    <div style="display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap; margin-bottom:10px;">
+      <div>
+        <span class="badge">{{ rev.entity_type }} #{{ rev.entity_id }}</span>
+        <span class="badge">{{ rev.locale.upper() }}</span>
+        <strong>{{ rev.field_name }}</strong>
+        <span style="color:var(--muted); font-size:0.85rem;">by {{ rev.author_name }}</span>
+      </div>
+      <span class="badge">{{ rev.status }}</span>
+    </div>
+
+    {% if rev.previous_value %}
+    <div style="font-size:0.85rem; color:var(--muted); margin-bottom:6px;">
+      <strong>{{ "Было:" if locale == "ru" else "Before:" }}</strong> {{ rev.previous_value }}
+    </div>
+    {% endif %}
+    <div style="font-size:0.94rem; margin-bottom:10px;">
+      <strong>{{ "Предложено:" if locale == "ru" else "Proposed:" }}</strong> {{ rev.proposed_value }}
+    </div>
+    {% if rev.reason %}
+    <div style="font-size:0.82rem; color:var(--muted); margin-bottom:10px;">{{ rev.reason }}</div>
+    {% endif %}
+
+    {% if rev.status == "pending" %}
+    <div style="display:flex; gap:10px;">
+      <button class="btn btn-primary btn-sm" onclick="decideRevision({{ rev.id }}, 'approve')">{{ ui.approve }}</button>
+      <button class="btn btn-secondary btn-sm" onclick="decideRevision({{ rev.id }}, 'reject')">{{ ui.reject }}</button>
+    </div>
+    {% endif %}
+  </div>
+  {% endfor %}
+</div>
+{% else %}
+<div class="panel">{{ ui.pending_empty }}</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+async function decideRevision(id, action) {
+  const res = await fetch(`/api/revisions/${id}/decision`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action }),
+  });
+  if (res.ok) {
+    location.reload();
+  }
+}
+</script>
+{% endblock %}

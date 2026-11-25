@@ -1,0 +1,181 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="detail-layout">
+  <aside>
+    <div class="panel">
+      <div class="portrait-box">
+        <div class="portrait-monogram">{{ media.canonical_title[:2].upper() }}</div>
+        {% if media.cover_url %}
+        <img src="{{ media.cover_url }}" alt="{{ tr.title if tr else media.canonical_title }}" onerror="this.style.display='none'" />
+        {% endif %}
+      </div>
+
+      <div class="kv-list">
+        <div class="kv-row">
+          <span>{{ ui.medium }}</span>
+          <span class="badge badge-{{ media.media_type }}">{{ media_type_labels.get(media.media_type, {}).get(locale, media.media_type) }}</span>
+        </div>
+        {% if media.release_year %}
+        <div class="kv-row"><span>{{ "Год" if locale == "ru" else "Year" }}</span><strong>{{ media.release_year }}</strong></div>
+        {% endif %}
+        {% if media.rating %}
+        <div class="kv-row"><span>{{ "Рейтинг" if locale == "ru" else "Rating" }}</span><strong class="rating-pill">★ {{ media.rating }}</strong></div>
+        {% endif %}
+        {% if media.total_units %}
+        <div class="kv-row"><span>{{ "Объём" if locale == "ru" else "Length" }}</span><strong>{{ media.total_units }} {{ media.unit_label }}</strong></div>
+        {% endif %}
+        {% if media.franchise %}
+        <div class="kv-row">
+          <span>{{ "Вселенная" if locale == "ru" else "Universe" }}</span>
+          <a href="/{{ locale }}/catalog?franchise={{ media.franchise.slug }}" style="color:var(--sky);">{{ media.franchise.canonical_name }}</a>
+        </div>
+        {% endif %}
+      </div>
+    </div>
+
+    <div class="panel">
+      <h3>{{ ui.tracker_title }}</h3>
+      <form id="kiroku-tracker-form" style="display:grid; gap:10px;">
+        <input type="hidden" name="media_id" value="{{ media.id }}" />
+        <div class="field-group">
+          <label>{{ "Статус" if locale == "ru" else "Status" }}</label>
+          <select name="status">
+            {% for key, labels in list_status_labels.items() %}
+            <option value="{{ key }}" {% if tracker and tracker.status == key %}selected{% endif %}>{{ labels[locale] }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="field-group">
+          <label>{{ "Прогресс" if locale == "ru" else "Progress" }} ({{ media.unit_label }})</label>
+          <input type="number" name="progress_unit" min="0" value="{{ tracker.progress_unit if tracker else 0 }}" />
+        </div>
+        <div class="field-group">
+          <label>{{ "Оценка (1–10)" if locale == "ru" else "Score (1–10)" }}</label>
+          <input type="number" name="score" min="1" max="10" value="{{ tracker.score if tracker and tracker.score else '' }}" />
+        </div>
+        <label style="display:flex; align-items:center; gap:8px; font-size:0.88rem;">
+          <input type="checkbox" name="is_favorite" {% if tracker and tracker.is_favorite %}checked{% endif %} />
+          {{ "В избранное" if locale == "ru" else "Favorite" }}
+        </label>
+        <button class="btn btn-primary" type="submit">{{ ui.save_tracker }}</button>
+      </form>
+    </div>
+  </aside>
+
+  <section>
+    <div class="panel">
+      <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:12px; flex-wrap:wrap;">
+        <div>
+          <h1 style="margin:0 0 6px;">{{ tr.title if tr else media.canonical_title }}</h1>
+          {% if media.native_title %}
+          <div style="color:var(--muted); font-size:0.95rem;">{{ media.canonical_title }} · {{ media.native_title }}</div>
+          {% endif %}
+        </div>
+        {% if tr %}
+        <span class="badge">{{ source_badges.get(tr.source, {}).get(locale, tr.source) }}</span>
+        {% endif %}
+      </div>
+
+      {% if media.genres %}
+      <div style="display:flex; flex-wrap:wrap; gap:6px; margin:14px 0;">
+        {% for g in media.genres %}<span class="badge">{{ g }}</span>{% endfor %}
+      </div>
+      {% endif %}
+
+      <h3>{{ ui.synopsis }}</h3>
+      <p style="color:#d6deed; white-space:pre-line;">{{ (tr.synopsis if tr else "") or "—" }}</p>
+
+      {% if mappings %}
+      <div style="margin-top:14px; font-size:0.82rem; color:var(--muted);">
+        {{ "Источники:" if locale == "ru" else "External IDs:" }}
+        {% for mp in mappings %}
+        <span class="badge">{{ mp.provider }} #{{ mp.external_id }}</span>
+        {% endfor %}
+      </div>
+      {% endif %}
+    </div>
+
+    <div class="panel">
+      <h2>{{ ui.cast_title }}</h2>
+      {% if media.character_links %}
+      <div class="grid-3">
+        {% for link in media.character_links %}
+        {% set ch = link.character %}
+        {% set ctr = pick_char_tr(ch) %}
+        <a class="card" href="/{{ locale }}/characters/{{ ch.slug }}">
+          <div style="display:flex; align-items:center; gap:12px; padding:12px;">
+            <div style="width:52px; height:52px; border-radius:10px; overflow:hidden; flex-shrink:0; background:#1b2438; display:grid; place-items:center; font-weight:700; color:rgba(255,255,255,0.3);">
+              {% if ch.image_url %}
+              <img src="{{ ch.image_url }}" alt="{{ ctr.name if ctr else ch.canonical_name }}" style="width:100%; height:100%; object-fit:cover; object-position:center top;" onerror="this.style.display='none'" />
+              {% else %}
+              {{ ch.canonical_name[:2].upper() }}
+              {% endif %}
+            </div>
+            <div style="min-width:0; flex:1;">
+              <div style="display:flex; justify-content:space-between; align-items:center; gap:6px;">
+                <strong style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">{{ ctr.name if ctr else ch.canonical_name }}</strong>
+                <span class="badge">{{ role_labels.get(link.role, {}).get(locale, link.role) }}</span>
+              </div>
+              <div class="card-meta" style="margin-top:4px;">
+                {% if ch.mbti %}<span>{{ ch.mbti }}</span>{% endif %}
+                {% if link.voice_actor %}<span>· {{ link.voice_actor }}</span>{% endif %}
+              </div>
+            </div>
+          </div>
+        </a>
+        {% endfor %}
+      </div>
+      {% else %}
+      <p style="color:var(--muted);">{{ ui.no_results }}</p>
+      {% endif %}
+    </div>
+
+    {% if media.franchise and media.franchise.media_items|length > 1 %}
+    <div class="panel">
+      <h2>{{ ui.franchise_timeline }} ({{ media.franchise.canonical_name }})</h2>
+      <div class="grid-3">
+        {% for rel in media.franchise.media_items %}
+        {% if rel.id != media.id %}
+        {% set rtr = pick_media_tr(rel) %}
+        <a class="card" href="/{{ locale }}/media/{{ rel.slug }}">
+          <div class="card-body">
+            <div class="card-title">{{ rtr.title if rtr else rel.canonical_title }}</div>
+            <div class="card-meta">
+              <span class="badge badge-{{ rel.media_type }}">{{ media_type_labels.get(rel.media_type, {}).get(locale, rel.media_type) }}</span>
+              {% if rel.release_year %}<span>{{ rel.release_year }}</span>{% endif %}
+            </div>
+          </div>
+        </a>
+        {% endif %}
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
+
+    <div class="panel">
+      <h3>{{ ui.suggest_edit }}</h3>
+      <form id="wiki-revision-form" style="display:grid; gap:10px;">
+        <input type="hidden" name="entity_type" value="media" />
+        <input type="hidden" name="entity_id" value="{{ media.id }}" />
+        <input type="hidden" name="locale" value="{{ locale }}" />
+        <div class="field-group">
+          <label>{{ "Поле" if locale == "ru" else "Field" }}</label>
+          <select name="field_name">
+            <option value="synopsis">{{ ui.synopsis }}</option>
+            <option value="title">{{ "Название" if locale == "ru" else "Title" }}</option>
+          </select>
+        </div>
+        <div class="field-group">
+          <label>{{ "Предложенный текст" if locale == "ru" else "Proposed Value" }}</label>
+          <textarea name="proposed_value" rows="3" required></textarea>
+        </div>
+        <div class="field-group">
+          <label>{{ "Комментарий / источник" if locale == "ru" else "Reason / Source" }}</label>
+          <input type="text" name="reason" placeholder="Например: уточнённый перевод описания" />
+        </div>
+        <button class="btn btn-secondary" type="submit">{{ ui.propose_btn }}</button>
+      </form>
+    </div>
+  </section>
+</div>
+{% endblock %}

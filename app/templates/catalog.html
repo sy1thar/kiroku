@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="section-head" style="margin-top:0;">
+  <h2>{{ active_franchise.canonical_name if active_franchise else ui.nav_catalog }}</h2>
+</div>
+
+{% if active_franchise %}
+<div class="panel" style="display:flex; justify-content:space-between; align-items:center; gap:14px; flex-wrap:wrap;">
+  <div>
+    <div style="font-size:0.8rem; color:var(--muted); text-transform:uppercase; letter-spacing:0.06em;">
+      {{ "Вселенная" if locale == "ru" else "Universe" }}
+    </div>
+    <div style="color:#d6deed; margin-top:4px;">
+      {{ active_franchise.description_ru if locale == "ru" else active_franchise.description_en }}
+    </div>
+  </div>
+  <a class="btn btn-secondary btn-sm" href="/{{ locale }}/catalog">{{ ui.filter_reset }}</a>
+</div>
+{% endif %}
+
+<form class="filter-panel" method="get" action="/{{ locale }}/catalog">
+  {% if selected_franchise %}
+  <input type="hidden" name="franchise" value="{{ selected_franchise }}" />
+  {% endif %}
+  <div class="field-group" style="min-width:210px;">
+    <label>{{ "Название" if locale == "ru" else "Title" }}</label>
+    <input type="search" name="q" value="{{ selected_q }}" placeholder="{{ ui.search_placeholder }}" />
+  </div>
+  <div class="field-group">
+    <label>{{ ui.medium }}</label>
+    <select name="type">
+      <option value="">{{ ui.all_types }}</option>
+      {% for key, labels in media_type_labels.items() %}
+      <option value="{{ key }}" {% if selected_type == key %}selected{% endif %}>{{ labels[locale] }}</option>
+      {% endfor %}
+    </select>
+  </div>
+
+  <div class="field-group">
+    <label>{{ "Сортировка" if locale == "ru" else "Sort by" }}</label>
+    <select name="sort">
+      <option value="popularity" {% if selected_sort == "popularity" %}selected{% endif %}>{{ "Популярность" if locale == "ru" else "Popularity" }}</option>
+      <option value="rating" {% if selected_sort == "rating" %}selected{% endif %}>{{ "Рейтинг" if locale == "ru" else "Rating" }}</option>
+      <option value="newest" {% if selected_sort == "newest" %}selected{% endif %}>{{ "Сначала новые" if locale == "ru" else "Newest" }}</option>
+    </select>
+  </div>
+
+  <button class="btn btn-primary" type="submit">{{ ui.filter_apply }}</button>
+  <a class="btn btn-secondary" href="/{{ locale }}/catalog">{{ ui.filter_reset }}</a>
+</form>
+
+{% if items %}
+<div class="grid-4">
+  {% for m in items %}
+  {% set tr = pick_media_tr(m) %}
+  <a class="card" href="/{{ locale }}/media/{{ m.slug }}">
+    <div class="card-poster">
+      <div class="monogram">{{ m.canonical_title[:2].upper() }}</div>
+      {% if m.cover_url %}
+      <img src="{{ m.cover_url }}" alt="{{ tr.title if tr else m.canonical_title }}" loading="lazy" onerror="this.style.display='none'" />
+      {% endif %}
+      <div class="card-poster-overlay">
+        <span class="badge badge-{{ m.media_type }}">{{ media_type_labels.get(m.media_type, {}).get(locale, m.media_type) }}</span>
+        {% if m.rating %}<span class="rating-pill">★ {{ m.rating }}</span>{% endif %}
+      </div>
+    </div>
+    <div class="card-body">
+      <div class="card-title">{{ tr.title if tr else m.canonical_title }}</div>
+      <div class="card-meta">
+        {% if m.release_year %}<span>{{ m.release_year }}</span>{% endif %}
+        {% for g in (m.genres or [])[:2] %}<span>· {{ g }}</span>{% endfor %}
+      </div>
+    </div>
+  </a>
+  {% endfor %}
+</div>
+{% else %}
+<div class="panel">{{ ui.no_results }}</div>
+{% endif %}
+{% endblock %}

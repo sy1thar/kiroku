@@ -1,0 +1,166 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="detail-layout">
+  <aside>
+    <div class="panel">
+      <div class="portrait-box">
+        <div class="portrait-monogram">{{ character.canonical_name[:2].upper() }}</div>
+        {% if character.image_url %}
+        <img src="{{ character.image_url }}" alt="{{ tr.name if tr else character.canonical_name }}" onerror="this.style.display='none'" />
+        {% endif %}
+      </div>
+
+      <div class="kv-list">
+        <div class="kv-row">
+          <span>{{ ui.hair_color }}</span>
+          <strong>{{ color_labels.get(character.hair_color, {}).get(locale, character.hair_color) }}</strong>
+        </div>
+        <div class="kv-row">
+          <span>{{ ui.eye_color }}</span>
+          <strong>{{ color_labels.get(character.eye_color, {}).get(locale, character.eye_color) }}</strong>
+        </div>
+        {% if character.mbti %}
+        <div class="kv-row"><span>MBTI</span><strong>{{ character.mbti }} {% if character.enneagram %}· {{ character.enneagram }}{% endif %}</strong></div>
+        {% endif %}
+        {% if character.archetype %}
+        <div class="kv-row"><span>{{ "Архетип" if locale == "ru" else "Archetype" }}</span><strong>{{ character.archetype }}</strong></div>
+        {% endif %}
+        {% if character.birthday %}
+        <div class="kv-row"><span>{{ "День рождения" if locale == "ru" else "Birthday" }}</span><strong>{{ character.birthday }}</strong></div>
+        {% endif %}
+        {% if character.franchise %}
+        <div class="kv-row">
+          <span>{{ "Вселенная" if locale == "ru" else "Universe" }}</span>
+          <a href="/{{ locale }}/catalog?franchise={{ character.franchise.slug }}" style="color:var(--sky);">{{ character.franchise.canonical_name }}</a>
+        </div>
+        {% endif %}
+      </div>
+    </div>
+  </aside>
+
+  <section>
+    <div class="panel">
+      <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:12px; flex-wrap:wrap;">
+        <div>
+          <h1 style="margin:0 0 6px;">{{ tr.name if tr else character.canonical_name }}</h1>
+          <div style="color:var(--muted); font-size:0.95rem;">
+            {{ character.canonical_name }}
+            {% if character.native_name %} · {{ character.native_name }}{% endif %}
+          </div>
+        </div>
+        {% if tr %}
+        <span class="badge">{{ source_badges.get(tr.source, {}).get(locale, tr.source) }}</span>
+        {% endif %}
+      </div>
+
+      <h3>{{ ui.bio }}</h3>
+      <p style="color:#d6deed; white-space:pre-line;">{{ (tr.bio if tr else "") or "—" }}</p>
+
+      {% if tr and tr.appearance_notes %}
+      <h3>{{ "Внешность" if locale == "ru" else "Appearance" }}</h3>
+      <p style="color:#d6deed;">{{ tr.appearance_notes }}</p>
+      {% endif %}
+
+      {% if tr and tr.abilities_summary %}
+      <h3>{{ ui.abilities }}</h3>
+      <p style="color:#d6deed;">{{ tr.abilities_summary }}</p>
+      {% endif %}
+    </div>
+
+    {% if tr and tr.spoiler_bio %}
+    <div class="panel spoiler-box">
+      <div style="display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap; margin-bottom:10px;">
+        <h3 style="margin:0; color:#fda4af;">{{ ui.spoiler_section }}</h3>
+        <button
+          id="spoiler-toggle-btn"
+          class="btn btn-secondary btn-sm"
+          type="button"
+          data-show-text="{{ ui.spoiler_toggle }}"
+          data-hide-text="{{ ui.spoiler_hide }}"
+        >{{ ui.spoiler_toggle }}</button>
+      </div>
+      <div style="font-size:0.82rem; color:var(--muted); margin-bottom:8px;">{{ ui.spoiler_guard_note }}</div>
+      <p id="spoiler-body" class="spoiler-content blurred" style="margin:0;">{{ tr.spoiler_bio }}</p>
+    </div>
+    {% endif %}
+
+    <div class="panel">
+      <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; margin-bottom:12px;">
+        <h3 style="margin:0;">{{ ui.traits_title }}</h3>
+        <span style="font-size:0.82rem; color:var(--muted);">{{ ui.vote_hint }}</span>
+      </div>
+      <div class="trait-list">
+        {% for tl in character.trait_links %}
+        <button
+          type="button"
+          class="trait-btn {% if tl.trait.slug in voted_traits %}voted{% endif %}"
+          data-character-id="{{ character.id }}"
+          data-vote-trait="{{ tl.trait.slug }}"
+        >
+          <span>{{ tl.trait.name_ru if locale == "ru" else tl.trait.name_en }}</span>
+          <span class="trait-count">{{ tl.votes_count }}</span>
+        </button>
+        {% endfor %}
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>{{ ui.appearances }}</h2>
+      <div class="grid-3">
+        {% for link in character.media_links %}
+        {% set m = link.media %}
+        {% set mtr = pick_media_tr(m) %}
+        <a class="card" href="/{{ locale }}/media/{{ m.slug }}">
+          <div style="display:flex; align-items:center; gap:12px; padding:12px;">
+            <div style="width:52px; height:68px; border-radius:9px; overflow:hidden; flex-shrink:0; background:#1b2438; display:grid; place-items:center; font-weight:700; color:rgba(255,255,255,0.3);">
+              {% if m.cover_url %}
+              <img src="{{ m.cover_url }}" alt="{{ mtr.title if mtr else m.canonical_title }}" style="width:100%; height:100%; object-fit:cover;" onerror="this.style.display='none'" />
+              {% else %}
+              {{ m.canonical_title[:2].upper() }}
+              {% endif %}
+            </div>
+            <div style="min-width:0; flex:1;">
+              <div class="card-title" style="font-size:0.95rem;">{{ mtr.title if mtr else m.canonical_title }}</div>
+              <div class="card-meta" style="margin-top:4px;">
+                <span class="badge badge-{{ m.media_type }}">{{ media_type_labels.get(m.media_type, {}).get(locale, m.media_type) }}</span>
+                <span class="badge">{{ role_labels.get(link.role, {}).get(locale, link.role) }}</span>
+              </div>
+              {% if link.voice_actor %}
+              <div style="font-size:0.8rem; color:var(--muted); margin-top:4px;">{{ link.voice_actor }}</div>
+              {% endif %}
+            </div>
+          </div>
+        </a>
+        {% endfor %}
+      </div>
+    </div>
+
+    <div class="panel">
+      <h3>{{ ui.suggest_edit }}</h3>
+      <form id="wiki-revision-form" style="display:grid; gap:10px;">
+        <input type="hidden" name="entity_type" value="character" />
+        <input type="hidden" name="entity_id" value="{{ character.id }}" />
+        <input type="hidden" name="locale" value="{{ locale }}" />
+        <div class="field-group">
+          <label>{{ "Поле" if locale == "ru" else "Field" }}</label>
+          <select name="field_name">
+            <option value="bio">{{ ui.bio }}</option>
+            <option value="abilities_summary">{{ ui.abilities }}</option>
+            <option value="spoiler_bio">{{ ui.spoiler_section }}</option>
+            <option value="mbti">MBTI</option>
+          </select>
+        </div>
+        <div class="field-group">
+          <label>{{ "Предложенное значение" if locale == "ru" else "Proposed Value" }}</label>
+          <textarea name="proposed_value" rows="3" required></textarea>
+        </div>
+        <div class="field-group">
+          <label>{{ "Комментарий / источник" if locale == "ru" else "Reason / Source" }}</label>
+          <input type="text" name="reason" />
+        </div>
+        <button class="btn btn-secondary" type="submit">{{ ui.propose_btn }}</button>
+      </form>
+    </div>
+  </section>
+</div>
+{% endblock %}

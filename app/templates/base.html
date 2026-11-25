@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="{{ locale }}">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{{ page_title }}</title>
+  <meta name="description" content="{{ ui.hero_subtitle }}" />
+  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
+  <link rel="alternate" hreflang="ru" href="/ru{{ path_suffix }}" />
+  <link rel="alternate" hreflang="en" href="/en{{ path_suffix }}" />
+  <link rel="stylesheet" href="/static/css/kiroku.css" />
+</head>
+<body>
+  <header class="site-header">
+    <div class="container header-inner">
+      <a class="brand" href="/{{ locale }}">
+        <span class="brand-mark">記</span>
+        <span>Kiroku</span>
+      </a>
+
+      <nav class="nav-links">
+        <a class="nav-link" href="/{{ locale }}">{{ ui.nav_home }}</a>
+        <a class="nav-link" href="/{{ locale }}/catalog">{{ ui.nav_catalog }}</a>
+        <a class="nav-link" href="/{{ locale }}/characters">{{ ui.nav_characters }}</a>
+        <a class="nav-link" href="/{{ locale }}/import">{{ ui.nav_import }}</a>
+        <a class="nav-link" href="/{{ locale }}/moderation">{{ ui.nav_moderation }}</a>
+        <a class="nav-link" href="/{{ locale }}/lists">{{ ui.nav_lists }}</a>
+        <a class="nav-link" href="/{{ locale }}/about">{{ ui.nav_about }}</a>
+      </nav>
+
+      <div class="search-wrap">
+        <input
+          id="global-search-input"
+          class="search-input"
+          type="search"
+          data-locale="{{ locale }}"
+          placeholder="{{ ui.search_placeholder }}"
+          autocomplete="off"
+        />
+        <div id="global-search-dropdown" class="search-dropdown"></div>
+      </div>
+
+      <div class="locale-switch" aria-label="Language switch">
+        <a class="locale-btn {% if locale == 'ru' %}active{% endif %}" href="/set-locale/ru?next={{ request.url.path }}">RU</a>
+        <a class="locale-btn {% if locale == 'en' %}active{% endif %}" href="/set-locale/en?next={{ request.url.path }}">EN</a>
+      </div>
+
+      {% if current_user %}
+      <div style="display:flex; align-items:center; gap:8px;">
+        <a class="badge" href="/{{ locale }}/lists">👤 {{ current_user.username }}</a>
+        <a class="nav-link" href="/logout">{{ ui.nav_logout }}</a>
+      </div>
+      {% else %}
+      <div style="display:flex; align-items:center; gap:6px;">
+        <a class="nav-link" href="/{{ locale }}/login">{{ ui.nav_login }}</a>
+        <a class="btn btn-primary btn-sm" href="/{{ locale }}/register">{{ ui.nav_register }}</a>
+      </div>
+      {% endif %}
+    </div>
+  </header>
+
+  <main class="container">
+    {% block content %}{% endblock %}
+  </main>
+
+  <div id="kiroku-toast" class="toast"></div>
+  <script src="/static/js/kiroku.js"></script>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

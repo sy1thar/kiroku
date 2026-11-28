@@ -34,11 +34,23 @@ class ImportQueryRequest(BaseModel):
     query: str = Field(min_length=2)
     media_type: str | None = None
     limit: int = Field(ge=1, le=15, default=5)
+    locale: str | None = Field(default=None, pattern="^(ru|en)$")
 
 
 class BatchImportRequest(BaseModel):
     category: str = Field(pattern="^(anime|manga|manhwa|manhua|novel|game|vn|series)$")
     count: int = Field(ge=3, le=15, default=10)
+    locale: str | None = Field(default=None, pattern="^(ru|en)$")
+
+
+class LoopStartRequest(BaseModel):
+    kind: str = Field(pattern="^(titles|characters_all|media_characters|translate)$")
+    categories: list[str] = Field(default_factory=list)
+    media_id: int | None = None
+    batch_size: int = Field(ge=1, le=20, default=10)
+    max_items: int = Field(ge=0, le=50000, default=0)
+    delay_ms: int = Field(ge=0, le=10000, default=250)
+    locale: str | None = Field(default=None, pattern="^(ru|en)$")
 
 
 class RegisterRequest(BaseModel):

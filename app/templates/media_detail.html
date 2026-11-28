@@ -197,11 +197,15 @@
           <label>{{ ui.synopsis }}</label>
           <textarea name="synopsis" rows="3">{{ tr.synopsis if tr else '' }}</textarea>
         </div>
-        <div style="display:flex; gap:10px; flex-wrap:wrap;">
+        <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:center;">
           <button class="btn btn-primary btn-sm" type="submit">{{ "Сохранить напрямую" if locale == "ru" else "Save Directly" }}</button>
-          <button class="btn btn-secondary btn-sm" type="button" onclick="adminImportMoreChars(this, {{ media.id }})">{{ "Догрузить персонажей из API (+12)" if locale == "ru" else "Batch Import Characters (+12)" }}</button>
-          <button class="btn btn-primary btn-sm" id="char-loop-start-btn" type="button" onclick="adminLoopImportChars({{ media.id }})">{{ "▶ Загрузить ВСЕХ персонажей циклом" if locale == "ru" else "▶ Loop Import ALL Characters" }}</button>
-          <button class="btn btn-secondary btn-sm" id="char-loop-stop-btn" type="button" style="color:#fda4af;" onclick="stopCharLoop()" disabled>{{ "⏹ Стоп" if locale == "ru" else "⏹ Stop" }}</button>
+          {% if can_import_more_chars %}
+          <span id="char-import-controls" style="display:inline-flex; gap:10px; flex-wrap:wrap;">
+            <button class="btn btn-secondary btn-sm" id="char-import-single-btn" type="button" onclick="adminImportMoreChars(this, {{ media.id }})">{{ "Догрузить персонажей из API (+12)" if locale == "ru" else "Batch Import Characters (+12)" }}</button>
+            <button class="btn btn-primary btn-sm" id="char-loop-start-btn" type="button" onclick="adminLoopImportChars({{ media.id }})">{{ "▶ Загрузить ВСЕХ персонажей циклом" if locale == "ru" else "▶ Loop Import ALL Characters" }}</button>
+          </span>
+          {% endif %}
+          <button class="btn btn-secondary btn-sm" id="char-loop-stop-btn" type="button" style="display:none; color:#fda4af;" onclick="stopCharLoop()">{{ "⏹ Стоп" if locale == "ru" else "⏹ Stop" }}</button>
           <button class="btn btn-secondary btn-sm" type="button" style="color:#fda4af;" onclick="adminDeleteMedia({{ media.id }})">{{ "Удалить тайтл" if locale == "ru" else "Delete Title" }}</button>
         </div>
       </form>
@@ -250,87 +254,78 @@ async function adminImportMoreChars(btn, mediaId) {
     }
     msg.style.color = "#6ee7b7";
     msg.textContent = `+${data.added_count}`;
+    if (data.media_exhausted || !data.has_more) {
+      const box = document.getElementById("char-import-controls");
+      if (box) box.style.display = "none";
+    }
     setTimeout(() => location.reload(), 600);
   } finally {
     btn.disabled = false;
   }
 }
 
-let charLoopStop = false;
+let charLoopMediaId = {{ media.id }};
+let charLoopHadReload = false;
+
 function stopCharLoop() {
-  charLoopStop = true;
-  document.getElementById("char-loop-stop-btn").disabled = true;
-  document.getElementById("admin-char-import-msg").textContent = "{{ 'Останавливаем после текущей волны...' if locale == 'ru' else 'Stopping after current wave...' }}";
+  if (window.KirokuLoop) window.KirokuLoop.stop();
 }
 
 async function adminLoopImportChars(mediaId) {
+  if (!window.KirokuLoop) return;
   const startBtn = document.getElementById("char-loop-start-btn");
   const stopBtn = document.getElementById("char-loop-stop-btn");
-  const msg = document.getElementById("admin-char-import-msg");
-  charLoopStop = false;
-  startBtn.disabled = true;
-  stopBtn.disabled = false;
+  if (startBtn) startBtn.disabled = true;
+  if (stopBtn) stopBtn.style.display = "inline-flex";
+  charLoopHadReload = false;
+  await window.KirokuLoop.start({
+    kind: "media_characters",
+    media_id: mediaId,
+    batch_size: 20,
+    max_items: 0,
+    delay_ms: 200,
+    locale: "{{ locale }}",
+  });
+}
 
-  let nextPage = 1;
-  let totalAdded = 0;
-  let wave = 0;
-  let emptyStreak = 0;
+if (window.KirokuLoop) {
+  window.KirokuLoop.onStatus((st) => {
+    const startBtn = document.getElementById("char-loop-start-btn");
+    const stopBtn = document.getElementById("char-loop-stop-btn");
+    const controls = document.getElementById("char-import-controls");
+    const msg = document.getElementById("admin-char-import-msg");
+    const isThisMedia = st.kind === "media_characters" && st.media_id === charLoopMediaId;
+    if (!isThisMedia) return;
 
-  try {
-    while (!charLoopStop) {
-      wave += 1;
-      msg.style.color = "var(--muted)";
-      msg.textContent = `{{ "Цикл: волна" if locale == "ru" else "Loop wave" }} #${wave} ({{ "стр." if locale == "ru" else "p." }} ${nextPage}) — {{ "добавлено" if locale == "ru" else "added" }}: ${totalAdded}...`;
-
-      let resData = null;
-      let ok = false;
-      for (let attempt = 0; attempt < 4; attempt++) {
-        if (charLoopStop) break;
-        const res = await fetch(`/api/admin/media/${mediaId}/import-characters`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ count: 12, locale: "{{ locale }}", start_page: nextPage }),
-        });
-        if ([429, 502, 503, 504].includes(res.status) && attempt < 3) {
-          msg.style.color = "#fcd34d";
-          msg.textContent = `HTTP ${res.status} — {{ "пауза 5 сек..." if locale == "ru" else "retrying in 5s..." }}`;
-          await new Promise((r) => setTimeout(r, 5000));
-          continue;
-        }
-        resData = await res.json().catch(() => ({}));
-        ok = res.ok;
-        break;
+    if (st.active) {
+      if (startBtn) startBtn.disabled = true;
+      if (stopBtn) {
+        stopBtn.style.display = "inline-flex";
+        stopBtn.disabled = Boolean(st.stop_requested);
       }
-
-      if (charLoopStop) break;
-      if (!ok) {
-        msg.style.color = "#fda4af";
-        msg.textContent = (resData && resData.detail) || "Import failed";
-        return;
+      if (msg) {
+        msg.style.color = "var(--muted)";
+        msg.textContent = `${st.current_label || ""} · +${st.added_total || 0}`;
       }
-
-      const added = resData.added_count || 0;
-      totalAdded += added;
-      nextPage = resData.next_page || (nextPage + 1);
-      emptyStreak = added > 0 ? 0 : emptyStreak + 1;
-
-      if (!resData.has_more || emptyStreak >= 3) {
-        break;
+    } else {
+      if (startBtn) startBtn.disabled = false;
+      if (stopBtn) stopBtn.style.display = "none";
+      if (st.media_exhausted && controls) {
+        controls.style.display = "none";
       }
-      await new Promise((r) => setTimeout(r, 1200));
+      if (msg && st.status !== "idle") {
+        msg.style.color = st.status === "error" ? "#fda4af" : "#6ee7b7";
+        msg.textContent =
+          st.status === "completed"
+            ? `{{ "✅ Все персонажи загружены (+%s)" if locale == "ru" else "✅ All characters imported (+%s)" }}`.replace("%s", st.added_total || 0)
+            : `{{ "⏹ Остановлено (+%s)" if locale == "ru" else "⏹ Stopped (+%s)" }}`.replace("%s", st.added_total || 0);
+      }
+      if (!charLoopHadReload && (st.added_total || 0) > 0 && (st.status === "completed" || st.status === "stopped")) {
+        charLoopHadReload = true;
+        setTimeout(() => location.reload(), 900);
+      }
     }
-
-    msg.style.color = "#6ee7b7";
-    msg.textContent = charLoopStop
-      ? `{{ "Остановлено. Добавлено персонажей" if locale == "ru" else "Stopped. Characters added" }}: ${totalAdded}`
-      : `{{ "✅ Готово! Все доступные персонажи загружены (+%s)" if locale == "ru" else "✅ Complete! All characters imported (+%s)" }}`.replace("%s", totalAdded);
-    if (totalAdded > 0) {
-      setTimeout(() => location.reload(), 900);
-    }
-  } finally {
-    startBtn.disabled = false;
-    stopBtn.disabled = true;
-  }
+  });
 }
 async function adminDeleteMedia(id) {
   if (!confirm("Delete this title?")) return;

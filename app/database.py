@@ -43,6 +43,18 @@ def init_db() -> None:
 
     Base.metadata.create_all(bind=engine)
     _ensure_user_columns()
+    _ensure_media_columns()
+
+
+def _ensure_media_columns() -> None:
+    """Add new columns to existing media tables without requiring manual migrations."""
+    inspector = inspect(engine)
+    if "media" not in inspector.get_table_names():
+        return
+    existing_cols = {col["name"] for col in inspector.get_columns("media")}
+    if "characters_exhausted" not in existing_cols:
+        with engine.begin() as conn:
+            conn.execute(text("ALTER TABLE media ADD COLUMN characters_exhausted BOOLEAN DEFAULT FALSE"))
 
 
 def _ensure_user_columns() -> None:

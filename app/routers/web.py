@@ -16,8 +16,20 @@ from app.i18n import (
     SOURCE_BADGES,
     t_ui,
 )
-from app.models import Character, CustomRole, Franchise, Media, Revision, SyncCursor, Trait, User, UserCustomRole, UserListEntry
-from app.services.auth import SESSION_COOKIE_NAME, get_current_user, get_profile_key, require_admin, require_user
+from app.models import (
+    Character,
+    CustomRole,
+    ExternalMapping,
+    Franchise,
+    Media,
+    Revision,
+    SyncCursor,
+    Trait,
+    User,
+    UserCustomRole,
+    UserListEntry,
+)
+from app.services.auth import SESSION_COOKIE_NAME, get_current_user, get_profile_key, require_admin, require_user, resolve_request_locale
 from app.services.catalog import (
     get_character_detail,
     get_media_detail,
@@ -78,8 +90,12 @@ def _base_context(
 
 
 @router.get("/set-locale/{locale}")
-def set_locale(locale: str, next: str = "/"):
+def set_locale(locale: str, request: Request, next: str = "/", db: Session = Depends(get_db)):
     target_loc = locale if locale in ("ru", "en") else "ru"
+    user = get_current_user(request, db)
+    if user and user.preferred_locale != target_loc:
+        user.preferred_locale = target_loc
+        db.commit()
     safe_next = next if next.startswith("/") else "/"
     # Rewrite /ru/ or /en/ prefix if present
     if safe_next.startswith("/ru/") or safe_next.startswith("/en/"):
@@ -207,9 +223,21 @@ def media_detail_page(locale: str, slug: str, request: Request, db: Session = De
     media = data["media"]
     tr = pick_media_translation(media, locale)
     title = tr.title if tr else media.canonical_title
+    ext_map = db.scalar(
+        select(ExternalMapping).where(
+            ExternalMapping.entity_type == "media",
+            ExternalMapping.entity_id == media.id,
+        )
+    )
+    can_import_more_chars = bool(
+        (not media.characters_exhausted)
+        and ext_map
+        and ext_map.provider in ("anilist", "vndb")
+    )
     ctx = _base_context(request, locale, f"{title} — Kiroku", f"/media/{slug}", db)
     ctx.update(data)
     ctx["tr"] = tr
+    ctx["can_import_more_chars"] = can_import_more_chars
     return templates.TemplateResponse(request, "media_detail.html", ctx)
 
 
@@ -313,9 +341,30 @@ def _render_import_hub(request: Request, locale: str, db: Session) -> HTMLRespon
         c.category: c
         for c in db.scalars(select(SyncCursor)).all()
     }
+    pending_media = list(
+        db.scalars(
+            select(Media)
+            .join(
+                ExternalMapping,
+                (ExternalMapping.entity_type == "media")
+                & (ExternalMapping.entity_id == Media.id)
+                & (ExternalMapping.provider.in_(["anilist", "vndb"])),
+            )
+            .where(Media.characters_exhausted.is_(False))
+            .options(selectinload(Media.translations))
+            .order_by(Media.popularity.desc(), Media.id.asc())
+            .limit(150)
+        ).all()
+    )
+    char_pending_titles = []
+    for m in pending_media:
+        tr = pick_media_translation(m, locale)
+        char_pending_titles.append({"id": m.id, "title": tr.title if tr else m.canonical_title, "media_type": m.media_type})
+
     ctx = _base_context(request, locale, f"{t_ui(locale)['nav_import']} — Kiroku", "/import", db)
     ctx["igdb_ready"] = bool(settings.twitch_client_id and settings.twitch_client_secret)
     ctx["cursors"] = cursors
+    ctx["char_pending_titles"] = char_pending_titles
     return templates.TemplateResponse(request, "import_hub.html", ctx)
 
 

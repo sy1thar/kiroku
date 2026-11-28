@@ -89,6 +89,7 @@ async def import_from_anilist(
     query: str,
     media_type: str | None = None,
     limit: int = 5,
+    locale: str = "ru",
 ) -> list[dict]:
     """Query AniList GraphQL API and persist matching media & characters into Kiroku."""
     settings = get_settings()
@@ -109,9 +110,55 @@ async def import_from_anilist(
         data = resp.json()
 
     items = ((data.get("data") or {}).get("Page") or {}).get("media") or []
-    imported: list[dict] = []
 
+    sem = asyncio.Semaphore(12)
+
+    async def _res_media(item: dict) -> tuple[str, str]:
+        if locale != "ru":
+            return "", ""
+        titles = item.get("title") or {}
+        canonical = titles.get("english") or titles.get("romaji") or titles.get("native") or "Untitled"
+        m_type, _, _ = _map_anilist_type(item)
+        shiki_kind = "animes" if m_type == "anime" else "mangas"
+        async with sem:
+            ru_title, ru_desc = await fetch_shikimori_ru(
+                kind=shiki_kind,
+                mal_id=item.get("idMal"),
+                search_title=titles.get("romaji") or canonical,
+            )
+            desc_clean = clean_html_markup(item.get("description"))
+            t_coro = translate_text(canonical, "ru") if not ru_title else asyncio.sleep(0, result=(ru_title, "api_raw"))
+            d_coro = translate_text(desc_clean[:1600], "ru") if (not ru_desc and desc_clean) else asyncio.sleep(0, result=(ru_desc, "api_raw"))
+            (rt, _), (rd, _) = await asyncio.gather(t_coro, d_coro)
+            return rt or canonical, rd
+
+    async def _res_char(edge: dict) -> tuple[str, str]:
+        if locale != "ru":
+            return "", ""
+        node = edge.get("node") or {}
+        cname = (node.get("name") or {}).get("full") or ""
+        cbio = clean_html_markup(node.get("description") or "")
+        async with sem:
+            rn = await fetch_shikimori_character_ru(cname)
+            n_coro = translate_text(cname, "ru") if not rn else asyncio.sleep(0, result=(rn, "api_raw"))
+            b_coro = translate_text(cbio[:900], "ru") if cbio else asyncio.sleep(0, result=("", "api_raw"))
+            (r_name, _), (r_bio, _) = await asyncio.gather(n_coro, b_coro)
+            return (r_name or cname), r_bio
+
+    media_ru_list = await asyncio.gather(*[_res_media(it) for it in items])
+    unique_edges: dict[str, dict] = {}
     for item in items:
+        for edge in (item.get("characters") or {}).get("edges") or []:
+            node = edge.get("node") or {}
+            cname = (node.get("name") or {}).get("full")
+            if cname and cname not in unique_edges:
+                unique_edges[cname] = edge
+    c_names = list(unique_edges.keys())
+    c_results = await asyncio.gather(*[_res_char(unique_edges[n]) for n in c_names])
+    c_map = dict(zip(c_names, c_results))
+
+    imported: list[dict] = []
+    for item, (ru_title, ru_desc) in zip(items, media_ru_list):
         titles = item.get("title") or {}
         canonical = titles.get("english") or titles.get("romaji") or titles.get("native") or "Untitled"
         m_type, units, unit_label = _map_anilist_type(item)
@@ -119,12 +166,6 @@ async def import_from_anilist(
         avg_score = item.get("averageScore")
         rating = round((avg_score / 10.0), 1) if avg_score else 0.0
         cover = (item.get("coverImage") or {}).get("extraLarge") or (item.get("coverImage") or {}).get("large") or ""
-        shiki_kind = "animes" if m_type == "anime" else "mangas"
-        ru_title, ru_desc = await fetch_shikimori_ru(
-            kind=shiki_kind,
-            mal_id=item.get("idMal"),
-            search_title=titles.get("romaji") or canonical,
-        )
 
         media = await upsert_media_from_external(
             db,
@@ -146,6 +187,7 @@ async def import_from_anilist(
             synopsis_en=item.get("description") or "",
             title_ru=ru_title,
             synopsis_ru=ru_desc,
+            target_locale=locale,
         )
 
         char_count = 0
@@ -158,6 +200,7 @@ async def import_from_anilist(
             va_name = (va_list[0].get("name") or {}).get("full", "") if va_list else ""
             raw_role = (edge.get("role") or "SUPPORTING").lower()
             role = "main" if raw_role == "main" else "supporting"
+            c_rn, c_rb = c_map.get(char_name, ("", ""))
 
             await upsert_character_from_external(
                 db,
@@ -169,6 +212,10 @@ async def import_from_anilist(
                 gender=(node.get("gender") or "unknown").lower(),
                 image_url=(node.get("image") or {}).get("large") or "",
                 bio_en=node.get("description") or "",
+                name_ru=c_rn,
+                bio_ru=c_rb,
+                translate_bio=False,
+                target_locale=locale,
                 popularity=node.get("favourites") or 0,
                 media_id=media.id,
                 role=role,
@@ -180,7 +227,7 @@ async def import_from_anilist(
             {
                 "id": media.id,
                 "slug": media.slug,
-                "title": media.canonical_title,
+                "title": (ru_title or canonical) if locale == "ru" else canonical,
                 "media_type": media.media_type,
                 "characters_linked": char_count,
             }
@@ -250,6 +297,7 @@ async def import_batch_from_anilist(
     db: Session,
     category: str = "anime",
     per_page: int = 10,
+    locale: str = "ru",
 ) -> dict:
     """
     Continuously import the next batch of NEW titles for 'anime', 'manga', 'manhwa', 'manhua', or 'novel'.
@@ -335,9 +383,11 @@ async def import_batch_from_anilist(
             else:
                 break
 
-    sem = asyncio.Semaphore(10)
+    sem = asyncio.Semaphore(14)
 
     async def _resolve_media_ru(item: dict) -> tuple[str, str]:
+        if locale != "ru":
+            return "", ""
         titles = item.get("title") or {}
         canonical = titles.get("english") or titles.get("romaji") or titles.get("native") or "Untitled"
         m_type, _, _ = _map_anilist_type(item)
@@ -348,37 +398,55 @@ async def import_batch_from_anilist(
                 mal_id=item.get("idMal"),
                 search_title=titles.get("romaji") or canonical,
             )
-            if not ru_title:
-                ru_title, _ = await translate_text(canonical, "ru")
-            if not ru_desc and item.get("description"):
-                ru_desc, _ = await translate_text(clean_html_markup(item.get("description")), "ru")
-            return ru_title or canonical, ru_desc
+            desc_clean = clean_html_markup(item.get("description"))
+            t_coro = translate_text(canonical, "ru") if not ru_title else asyncio.sleep(0, result=(ru_title, "api_raw"))
+            d_coro = translate_text(desc_clean[:1400], "ru") if (not ru_desc and desc_clean) else asyncio.sleep(0, result=(ru_desc, "api_raw"))
+            (rt, _), (rd, _) = await asyncio.gather(t_coro, d_coro)
+            return rt or canonical, rd
 
     async def _resolve_char_ru(edge: dict) -> tuple[str, str]:
+        if locale != "ru":
+            return "", ""
         node = edge.get("node") or {}
         name = (node.get("name") or {}).get("full") or ""
         bio_clean = clean_html_markup(node.get("description") or "")
         async with sem:
             ru_name = await fetch_shikimori_character_ru(name)
-            if not ru_name:
-                ru_name, _ = await translate_text(name, "ru")
-            ru_bio = ""
-            if bio_clean:
-                ru_bio, _ = await translate_text(bio_clean[:1200], "ru")
-            return (ru_name or name), ru_bio
+            n_coro = translate_text(name, "ru") if not ru_name else asyncio.sleep(0, result=(ru_name, "api_raw"))
+            b_coro = translate_text(bio_clean[:900], "ru") if bio_clean else asyncio.sleep(0, result=("", "api_raw"))
+            (rn, _), (rb, _) = await asyncio.gather(n_coro, b_coro)
+            return (rn or name), rb
 
     media_ru_list = await asyncio.gather(*[_resolve_media_ru(it) for it in candidates])
 
     unique_edges_by_name: dict[str, dict] = {}
+    candidate_cids: set[str] = set()
     for item in candidates:
         for edge in (item.get("characters") or {}).get("edges") or []:
             node = edge.get("node") or {}
             cname = (node.get("name") or {}).get("full")
+            cid = str(node.get("id") or "")
+            if cid:
+                candidate_cids.add(cid)
             if cname and cname not in unique_edges_by_name:
                 unique_edges_by_name[cname] = edge
-    unique_names = list(unique_edges_by_name.keys())
-    char_ru_results = await asyncio.gather(*[_resolve_char_ru(unique_edges_by_name[n]) for n in unique_names])
-    char_ru_map = dict(zip(unique_names, char_ru_results))
+
+    existing_char_cids = set(
+        db.scalars(
+            select(ExternalMapping.external_id).where(
+                ExternalMapping.entity_type == "character",
+                ExternalMapping.provider == "anilist",
+                ExternalMapping.external_id.in_(candidate_cids) if candidate_cids else False,
+            )
+        ).all()
+    ) if candidate_cids else set()
+
+    to_translate_names = [
+        n for n, edge in unique_edges_by_name.items()
+        if str((edge.get("node") or {}).get("id") or "") not in existing_char_cids
+    ]
+    char_ru_results = await asyncio.gather(*[_resolve_char_ru(unique_edges_by_name[n]) for n in to_translate_names])
+    char_ru_map = dict(zip(to_translate_names, char_ru_results))
 
     imported: list[dict] = []
     for item, (ru_title, ru_desc) in zip(candidates, media_ru_list):
@@ -410,6 +478,7 @@ async def import_batch_from_anilist(
             synopsis_en=item.get("description") or "",
             title_ru=ru_title,
             synopsis_ru=ru_desc,
+            target_locale=locale,
         )
 
         char_count = 0
@@ -437,6 +506,7 @@ async def import_batch_from_anilist(
                 name_ru=c_ru_name,
                 bio_ru=c_ru_bio,
                 translate_bio=False,
+                target_locale=locale,
                 popularity=node.get("favourites") or 0,
                 media_id=media.id,
                 role=role,
@@ -448,7 +518,7 @@ async def import_batch_from_anilist(
             {
                 "id": media.id,
                 "slug": media.slug,
-                "title": media.canonical_title,
+                "title": (ru_title or canonical) if locale == "ru" else canonical,
                 "media_type": media.media_type,
                 "characters_linked": char_count,
             }
@@ -570,7 +640,7 @@ async def import_more_characters_for_media(
                 page += 1
         has_more = bool(broke_mid_page or has_next)
 
-        sem = asyncio.Semaphore(4)
+        sem = asyncio.Semaphore(14)
 
         async def _res_char(edge: dict) -> tuple[str, str]:
             node = edge.get("node") or {}
@@ -580,12 +650,10 @@ async def import_more_characters_for_media(
                 return cname, cbio
             async with sem:
                 rn = await fetch_shikimori_character_ru(cname)
-                if not rn:
-                    rn, _ = await translate_text(cname, "ru")
-                rb = ""
-                if cbio:
-                    rb, _ = await translate_text(cbio[:1400], "ru")
-                return (rn or cname), rb
+                n_coro = translate_text(cname, "ru") if not rn else asyncio.sleep(0, result=(rn, "api_raw"))
+                b_coro = translate_text(cbio[:900], "ru") if cbio else asyncio.sleep(0, result=("", "api_raw"))
+                (r_name, _), (r_bio, _) = await asyncio.gather(n_coro, b_coro)
+                return (r_name or cname), r_bio
 
         resolved_chars = await asyncio.gather(*[_res_char(e) for e in new_edges])
 
@@ -610,7 +678,8 @@ async def import_more_characters_for_media(
                 bio_en=node.get("description") or "",
                 name_ru=ru_name if locale == "ru" else cname,
                 bio_ru=ru_bio if locale == "ru" else "",
-                translate_bio=(locale == "ru"),
+                translate_bio=False,
+                target_locale=locale,
                 popularity=node.get("favourites") or 0,
                 media_id=media.id,
                 role=role,
@@ -618,12 +687,15 @@ async def import_more_characters_for_media(
             )
             added.append({"id": ch.id, "slug": ch.slug, "name": ru_name if locale == "ru" else cname})
 
+        if not has_more:
+            media.characters_exhausted = True
         db.commit()
         return {
             "media_id": media.id,
             "added_count": len(added),
             "next_page": page if broke_mid_page else page,
             "has_more": has_more,
+            "media_exhausted": bool(media.characters_exhausted),
             "characters": added,
         }
 
@@ -645,12 +717,9 @@ async def import_more_characters_for_media(
             rows = cr_json.get("results") or []
             has_next = bool(cr_json.get("more"))
 
-        added = []
+        new_rows: list[dict] = []
         broke_mid_page = False
         for ch_data in rows:
-            if len(added) >= count:
-                broke_mid_page = True
-                break
             ext_map = db.scalar(
                 select(ExternalMapping).where(
                     ExternalMapping.entity_type == "character",
@@ -660,6 +729,28 @@ async def import_more_characters_for_media(
             )
             if ext_map and ext_map.entity_id in existing_char_ids:
                 continue
+            new_rows.append(ch_data)
+            if len(new_rows) >= count:
+                broke_mid_page = True
+                break
+
+        sem = asyncio.Semaphore(14)
+
+        async def _res_vndb_char(ch_data: dict) -> tuple[str, str]:
+            cname = ch_data.get("name") or "Unknown"
+            cbio = clean_html_markup(ch_data.get("description") or "")
+            if locale != "ru":
+                return cname, cbio
+            async with sem:
+                n_coro = translate_text(cname, "ru")
+                b_coro = translate_text(cbio[:900], "ru") if cbio else asyncio.sleep(0, result=("", "api_raw"))
+                (rn, _), (rb, _) = await asyncio.gather(n_coro, b_coro)
+                return (rn or cname), rb
+
+        resolved_vndb = await asyncio.gather(*[_res_vndb_char(r) for r in new_rows])
+        added = []
+        for ch_data, (ru_name, ru_bio) in zip(new_rows, resolved_vndb):
+            cname = ch_data.get("name") or "Unknown"
             sex_raw = ch_data.get("sex")
             gender = {"m": "male", "f": "female"}.get(sex_raw[0], "unknown") if sex_raw else "unknown"
             ch = await upsert_character_from_external(
@@ -667,23 +758,30 @@ async def import_more_characters_for_media(
                 provider="vndb",
                 external_id=ch_data["id"],
                 external_url=f"https://vndb.org/{ch_data['id']}",
-                canonical_name=ch_data.get("name") or "Unknown",
+                canonical_name=cname,
                 native_name=ch_data.get("original") or "",
                 gender=gender,
                 image_url=(ch_data.get("image") or {}).get("url") or "",
                 bio_en=ch_data.get("description") or "",
+                name_ru=ru_name if locale == "ru" else cname,
+                bio_ru=ru_bio if locale == "ru" else "",
                 translate_bio=False,
+                target_locale=locale,
                 media_id=media.id,
                 role="supporting",
             )
-            added.append({"id": ch.id, "slug": ch.slug, "name": ch.canonical_name})
+            added.append({"id": ch.id, "slug": ch.slug, "name": ru_name if locale == "ru" else cname})
+        has_more_out = bool(broke_mid_page or has_next)
+        if not has_more_out:
+            media.characters_exhausted = True
         db.commit()
         next_vndb_page = page if broke_mid_page else (page + 1 if has_next else page)
         return {
             "media_id": media.id,
             "added_count": len(added),
             "next_page": next_vndb_page,
-            "has_more": bool(broke_mid_page or has_next),
+            "has_more": has_more_out,
+            "media_exhausted": bool(media.characters_exhausted),
             "characters": added,
         }
 

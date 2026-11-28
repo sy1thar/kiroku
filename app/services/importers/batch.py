@@ -11,9 +11,21 @@ from app.services.importers.base import (
     upsert_character_from_external,
     upsert_media_from_external,
 )
+from app.services.translation import translate_text
 
 
-async def import_batch_from_vndb(db: Session, count: int = 10) -> dict:
+async def _translate_pair_if_needed(title_en: str, desc_en: str, locale: str) -> tuple[str, str]:
+    """Concurrently translate a title and short description when target locale is Russian."""
+    if locale != "ru":
+        return title_en, ""
+    clean_desc = clean_html_markup(desc_en)[:1200]
+    t_coro = translate_text(title_en, "ru") if title_en else asyncio.sleep(0, result=("", "api_raw"))
+    d_coro = translate_text(clean_desc, "ru") if clean_desc else asyncio.sleep(0, result=("", "api_raw"))
+    (tr_t, _), (tr_d, _) = await asyncio.gather(t_coro, d_coro)
+    return (tr_t or title_en), tr_d
+
+
+async def import_batch_from_vndb(db: Session, count: int = 10, locale: str = "ru") -> dict:
     """Batch import visual novels & characters from VNDB Kana v2 API."""
     settings = get_settings()
     cursor = db.scalar(
@@ -41,7 +53,19 @@ async def import_batch_from_vndb(db: Session, count: int = 10) -> dict:
         vns = payload.get("results") or []
         has_next = bool(payload.get("more"))
 
-        sem = asyncio.Semaphore(5)
+        vn_ids = [vn["id"] for vn in vns]
+        existing_ids = set(
+            db.scalars(
+                select(ExternalMapping.external_id).where(
+                    ExternalMapping.entity_type == "media",
+                    ExternalMapping.provider == "vndb",
+                    ExternalMapping.external_id.in_(vn_ids) if vn_ids else False,
+                )
+            ).all()
+        ) if vn_ids else set()
+        new_vns = [vn for vn in vns if vn["id"] not in existing_ids]
+
+        sem = asyncio.Semaphore(8)
 
         async def _fetch_chars(vn_id: str) -> list[dict]:
             async with sem:
@@ -55,21 +79,27 @@ async def import_batch_from_vndb(db: Session, count: int = 10) -> dict:
                 )
                 return (cr.json().get("results") or []) if cr.status_code == 200 else []
 
-        char_lists = await asyncio.gather(*[_fetch_chars(vn["id"]) for vn in vns])
+        char_lists = await asyncio.gather(*[_fetch_chars(vn["id"]) for vn in new_vns])
+
+    loc_sem = asyncio.Semaphore(14)
+
+    async def _loc_item(title_s: str, desc_s: str) -> tuple[str, str]:
+        async with loc_sem:
+            return await _translate_pair_if_needed(title_s, desc_s, locale)
+
+    vn_locs = await asyncio.gather(
+        *[_loc_item(vn.get("title") or "Untitled VN", vn.get("description") or "") for vn in new_vns]
+    )
+    flat_chars = [(i, j, ch) for i, chars in enumerate(char_lists) for j, ch in enumerate(chars)]
+    ch_locs = await asyncio.gather(
+        *[_loc_item(ch.get("name") or "Unknown", ch.get("description") or "") for _, _, ch in flat_chars]
+    )
+    ch_loc_map = {(i, j): loc for (i, j, _), loc in zip(flat_chars, ch_locs)}
 
     imported: list[dict] = []
-    for vn, chars in zip(vns, char_lists):
+    for i, (vn, chars, (t_ru, d_ru)) in enumerate(zip(new_vns, char_lists, vn_locs)):
         vn_id = vn["id"]
-        exists = db.scalar(
-            select(ExternalMapping.id).where(
-                ExternalMapping.entity_type == "media",
-                ExternalMapping.provider == "vndb",
-                ExternalMapping.external_id == vn_id,
-            )
-        )
-        if exists:
-            continue
-
+        canonical = vn.get("title") or "Untitled VN"
         year = int(vn["released"][:4]) if vn.get("released") and vn["released"][:4].isdigit() else None
         rating = round(vn["rating"] / 10.0, 1) if vn.get("rating") else 0.0
         tags = [t["name"] for t in (vn.get("tags") or [])[:5] if t.get("name")]
@@ -81,7 +111,7 @@ async def import_batch_from_vndb(db: Session, count: int = 10) -> dict:
             external_id=vn_id,
             external_url=f"https://vndb.org/{vn_id}",
             media_type="vn",
-            canonical_title=vn.get("title") or "Untitled VN",
+            canonical_title=canonical,
             native_title=vn.get("alttitle") or "",
             release_year=year,
             rating=rating,
@@ -91,12 +121,16 @@ async def import_batch_from_vndb(db: Session, count: int = 10) -> dict:
             genres=tags,
             platforms=["PC"],
             synopsis_en=vn.get("description") or "",
+            title_ru=t_ru,
+            synopsis_ru=d_ru,
+            target_locale=locale,
         )
 
         char_count = 0
-        for ch in chars:
+        for j, ch in enumerate(chars):
             sex_raw = ch.get("sex")
             gender = {"m": "male", "f": "female"}.get(sex_raw[0], "unknown") if sex_raw else "unknown"
+            c_name_ru, c_bio_ru = ch_loc_map.get((i, j), ("", ""))
             await upsert_character_from_external(
                 db,
                 provider="vndb",
@@ -107,7 +141,10 @@ async def import_batch_from_vndb(db: Session, count: int = 10) -> dict:
                 gender=gender,
                 image_url=(ch.get("image") or {}).get("url") or "",
                 bio_en=ch.get("description") or "",
+                name_ru=c_name_ru,
+                bio_ru=c_bio_ru,
                 translate_bio=False,
+                target_locale=locale,
                 media_id=media.id,
                 role="main" if char_count == 0 else "supporting",
             )
@@ -117,7 +154,7 @@ async def import_batch_from_vndb(db: Session, count: int = 10) -> dict:
             {
                 "id": media.id,
                 "slug": media.slug,
-                "title": media.canonical_title,
+                "title": (t_ru or canonical) if locale == "ru" else canonical,
                 "media_type": "vn",
                 "characters_linked": char_count,
             }
@@ -137,7 +174,7 @@ async def import_batch_from_vndb(db: Session, count: int = 10) -> dict:
     }
 
 
-async def import_batch_from_games(db: Session, count: int = 10) -> dict:
+async def import_batch_from_games(db: Session, count: int = 10, locale: str = "ru") -> dict:
     """Batch import top video games via SteamSpy + Steam Store public API (zero keys needed)."""
     cursor = db.scalar(
         select(SyncCursor).where(SyncCursor.provider == "steam", SyncCursor.category == "game")
@@ -149,6 +186,7 @@ async def import_batch_from_games(db: Session, count: int = 10) -> dict:
 
     offset_idx = cursor.next_page - 1
     steam_page = offset_idx // 10
+    steam_lang = "russian" if locale == "ru" else "english"
     async with httpx.AsyncClient(timeout=15.0) as client:
         sp_resp = await client.get(
             "https://steamspy.com/api.php",
@@ -193,14 +231,26 @@ async def import_batch_from_games(db: Session, count: int = 10) -> dict:
                 "items": [],
             }
 
-        sem = asyncio.Semaphore(5)
+        appids = [str(g["appid"]) for g in slice_games if g.get("appid")]
+        existing_ids = set(
+            db.scalars(
+                select(ExternalMapping.external_id).where(
+                    ExternalMapping.entity_type == "media",
+                    ExternalMapping.provider == "steam",
+                    ExternalMapping.external_id.in_(appids) if appids else False,
+                )
+            ).all()
+        ) if appids else set()
+        new_games = [g for g in slice_games if g.get("appid") and str(g["appid"]) not in existing_ids]
+
+        sem = asyncio.Semaphore(8)
 
         async def _fetch_steam_detail(appid: int) -> dict:
             async with sem:
                 try:
                     r = await client.get(
                         "https://store.steampowered.com/api/appdetails",
-                        params={"appids": str(appid), "l": "russian"},
+                        params={"appids": str(appid), "l": steam_lang},
                     )
                     if r.status_code == 200:
                         node = (r.json() or {}).get(str(appid)) or {}
@@ -210,27 +260,18 @@ async def import_batch_from_games(db: Session, count: int = 10) -> dict:
                     pass
                 return {}
 
-        details = await asyncio.gather(*[_fetch_steam_detail(g["appid"]) for g in slice_games if g.get("appid")])
+        details = await asyncio.gather(*[_fetch_steam_detail(g["appid"]) for g in new_games])
 
     imported: list[dict] = []
-    for g, detail in zip(slice_games, details):
+    for g, detail in zip(new_games, details):
         appid = str(g["appid"])
-        exists = db.scalar(
-            select(ExternalMapping.id).where(
-                ExternalMapping.entity_type == "media",
-                ExternalMapping.provider == "steam",
-                ExternalMapping.external_id == appid,
-            )
-        )
-        if exists:
-            continue
-
         pos = g.get("positive") or 0
         neg = g.get("negative") or 0
         rating = round((pos / (pos + neg)) * 10.0, 1) if (pos + neg) > 0 else 8.0
         genres = [x["description"] for x in (detail.get("genres") or [])[:4] if x.get("description")]
-        ru_desc = clean_html_markup(detail.get("short_description") or "")
+        desc_text = clean_html_markup(detail.get("short_description") or "")
         cover = f"https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/{appid}/library_600x900_2x.jpg"
+        canonical = g.get("name") or "Untitled Game"
 
         media = await upsert_media_from_external(
             db,
@@ -238,16 +279,17 @@ async def import_batch_from_games(db: Session, count: int = 10) -> dict:
             external_id=appid,
             external_url=f"https://store.steampowered.com/app/{appid}",
             media_type="game",
-            canonical_title=g.get("name") or "Untitled Game",
+            canonical_title=canonical,
             rating=rating,
             popularity=pos,
             cover_url=cover,
             unit_label="hr",
             genres=genres or ["Action", "PC Game"],
             platforms=["PC"],
-            synopsis_en=ru_desc,
-            title_ru=g.get("name") or "Untitled Game",
-            synopsis_ru=ru_desc,
+            synopsis_en=desc_text if locale == "en" else "",
+            title_ru=canonical,
+            synopsis_ru=desc_text if locale == "ru" else "",
+            target_locale=locale,
         )
         imported.append(
             {
@@ -275,7 +317,7 @@ async def import_batch_from_games(db: Session, count: int = 10) -> dict:
     }
 
 
-async def import_batch_from_series(db: Session, count: int = 10) -> dict:
+async def import_batch_from_series(db: Session, count: int = 10, locale: str = "ru") -> dict:
     """Batch import TV series & animated shows + cast from TVMaze public API."""
     cursor = db.scalar(
         select(SyncCursor).where(SyncCursor.provider == "tvmaze", SyncCursor.category == "series")
@@ -327,7 +369,19 @@ async def import_batch_from_series(db: Session, count: int = 10) -> dict:
                 "items": [],
             }
 
-        sem = asyncio.Semaphore(5)
+        show_ids = [str(s["id"]) for s in slice_shows]
+        existing_ids = set(
+            db.scalars(
+                select(ExternalMapping.external_id).where(
+                    ExternalMapping.entity_type == "media",
+                    ExternalMapping.provider == "tvmaze",
+                    ExternalMapping.external_id.in_(show_ids) if show_ids else False,
+                )
+            ).all()
+        ) if show_ids else set()
+        new_shows = [s for s in slice_shows if str(s["id"]) not in existing_ids]
+
+        sem = asyncio.Semaphore(8)
 
         async def _fetch_cast(show_id: int) -> list[dict]:
             async with sem:
@@ -339,21 +393,27 @@ async def import_batch_from_series(db: Session, count: int = 10) -> dict:
                     pass
                 return []
 
-        cast_lists = await asyncio.gather(*[_fetch_cast(s["id"]) for s in slice_shows])
+        cast_lists = await asyncio.gather(*[_fetch_cast(s["id"]) for s in new_shows])
+
+    loc_sem = asyncio.Semaphore(14)
+
+    async def _loc_item(title_s: str, desc_s: str) -> tuple[str, str]:
+        async with loc_sem:
+            return await _translate_pair_if_needed(title_s, desc_s, locale)
+
+    show_locs = await asyncio.gather(
+        *[_loc_item(s.get("name") or "Untitled Series", s.get("summary") or "") for s in new_shows]
+    )
+    flat_cast = [(i, j, entry) for i, cast in enumerate(cast_lists) for j, entry in enumerate(cast) if (entry.get("character") or {}).get("id")]
+    cast_locs = await asyncio.gather(
+        *[_loc_item((entry.get("character") or {}).get("name") or "Unknown", "") for _, _, entry in flat_cast]
+    )
+    cast_loc_map = {(i, j): loc[0] for (i, j, _), loc in zip(flat_cast, cast_locs)}
 
     imported: list[dict] = []
-    for s, cast in zip(slice_shows, cast_lists):
+    for i, (s, cast, (t_ru, d_ru)) in enumerate(zip(new_shows, cast_lists, show_locs)):
         show_id = str(s["id"])
-        exists = db.scalar(
-            select(ExternalMapping.id).where(
-                ExternalMapping.entity_type == "media",
-                ExternalMapping.provider == "tvmaze",
-                ExternalMapping.external_id == show_id,
-            )
-        )
-        if exists:
-            continue
-
+        canonical = s.get("name") or "Untitled Series"
         premiered = s.get("premiered") or ""
         year = int(premiered[:4]) if premiered[:4].isdigit() else None
         rating = float((s.get("rating") or {}).get("average") or 0.0)
@@ -365,7 +425,7 @@ async def import_batch_from_series(db: Session, count: int = 10) -> dict:
             external_id=show_id,
             external_url=s.get("url") or "",
             media_type="series",
-            canonical_title=s.get("name") or "Untitled Series",
+            canonical_title=canonical,
             release_year=year,
             status="completed" if s.get("status") == "Ended" else "ongoing",
             rating=round(rating, 1),
@@ -374,25 +434,30 @@ async def import_batch_from_series(db: Session, count: int = 10) -> dict:
             unit_label="ep",
             genres=s.get("genres") or [],
             synopsis_en=s.get("summary") or "",
+            title_ru=t_ru,
+            synopsis_ru=d_ru,
+            target_locale=locale,
         )
 
         char_count = 0
-        for entry in cast:
+        for j, entry in enumerate(cast):
             ch = entry.get("character") or {}
             person = entry.get("person") or {}
             if not ch.get("id"):
                 continue
+            cname = ch.get("name") or "Unknown"
             c_img = (ch.get("image") or {}).get("original") or (ch.get("image") or {}).get("medium") or ""
             await upsert_character_from_external(
                 db,
                 provider="tvmaze",
                 external_id=str(ch["id"]),
                 external_url=ch.get("url") or "",
-                canonical_name=ch.get("name") or "Unknown",
+                canonical_name=cname,
                 gender=(person.get("gender") or "unknown").lower(),
                 image_url=c_img,
-                name_ru=ch.get("name") or "Unknown",
+                name_ru=cast_loc_map.get((i, j), cname),
                 translate_bio=False,
+                target_locale=locale,
                 media_id=media.id,
                 role="main",
                 voice_actor=person.get("name") or "",
@@ -403,7 +468,7 @@ async def import_batch_from_series(db: Session, count: int = 10) -> dict:
             {
                 "id": media.id,
                 "slug": media.slug,
-                "title": media.canonical_title,
+                "title": (t_ru or canonical) if locale == "ru" else canonical,
                 "media_type": "series",
                 "characters_linked": char_count,
             }
@@ -423,14 +488,14 @@ async def import_batch_from_series(db: Session, count: int = 10) -> dict:
     }
 
 
-async def run_batch_import(db: Session, category: str, count: int = 10) -> dict:
+async def run_batch_import(db: Session, category: str, count: int = 10, locale: str = "ru") -> dict:
     """Dispatch batch import across all 8 Kiroku media categories."""
     if category in ("anime", "manga", "manhwa", "manhua", "novel"):
-        return await import_batch_from_anilist(db, category=category, per_page=count)
+        return await import_batch_from_anilist(db, category=category, per_page=count, locale=locale)
     if category == "vn":
-        return await import_batch_from_vndb(db, count=count)
+        return await import_batch_from_vndb(db, count=count, locale=locale)
     if category == "game":
-        return await import_batch_from_games(db, count=count)
+        return await import_batch_from_games(db, count=count, locale=locale)
     if category == "series":
-        return await import_batch_from_series(db, count=count)
+        return await import_batch_from_series(db, count=count, locale=locale)
     raise ValueError(f"Unsupported category: {category}")

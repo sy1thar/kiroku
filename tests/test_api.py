@@ -429,14 +429,19 @@ def test_auto_loop_ui_and_character_pagination(client: TestClient, monkeypatch):
     )
     assert login.status_code == 200
 
-    # UI contains auto-loop controls on /ru/import, /ru/admin, and /ru/media/{slug}
+    # UI contains auto-loop controls, global mini-widget, character loop on /import, and hidden Stop buttons
     imp_html = client.get("/ru/import").text
     assert "loop-start-btn" in imp_html
-    assert "startBatchAutoLoop" in imp_html
+    assert "cloop-start-btn" in imp_html
+    assert "startTitlesAutoLoop" in imp_html
+    assert "startCharsAutoLoop" in imp_html
+    assert 'id="loop-stop-btn"' in imp_html and "display:none;" in imp_html
+    assert 'id="kiroku-loop-mini"' in imp_html
 
     adm_html = client.get("/ru/admin").text
     assert "tr-loop-start-btn" in adm_html
     assert "loopTranslateMissing" in adm_html
+    assert 'id="kiroku-loop-mini"' in adm_html
 
     db_gen = app.dependency_overrides[get_db]()
     db_session = next(db_gen)
@@ -536,7 +541,13 @@ def test_auto_loop_ui_and_character_pagination(client: TestClient, monkeypatch):
     d2 = wave2.json()
     assert d2["added_count"] == 2
     assert d2["has_more"] is False
+    assert d2["media_exhausted"] is True
     assert pages_seen == [1, 1, 2]
+
+    # Once all characters for a title are loaded, character import buttons disappear from DOM on media detail page
+    det_after = client.get(f"/ru/media/{media_slug}").text
+    assert 'id="char-import-controls"' not in det_after
+    assert 'id="char-loop-start-btn"' not in det_after
 
     # TVMaze 404 exhaustion returns cleanly with has_next_page=False instead of crashing loop
     class Fake404Client:
@@ -557,3 +568,16 @@ def test_auto_loop_ui_and_character_pagination(client: TestClient, monkeypatch):
     assert end_res.status_code == 200
     assert end_res.json()["has_next_page"] is False
     assert end_res.json()["imported_count"] == 0
+
+    # Background loop status & stop endpoints work and adhere to saved locale setting
+    client.get("/set-locale/en?next=/en/import", follow_redirects=False)
+    loop_st = client.post(
+        "/api/admin/loop/start",
+        json={"kind": "characters_all", "categories": ["anime"], "batch_size": 10, "max_items": 10, "delay_ms": 0},
+    )
+    assert loop_st.status_code == 200
+    assert loop_st.json()["locale"] == "en"
+    stop_res = client.post("/api/admin/loop/stop")
+    assert stop_res.status_code == 200
+    status_res = client.get("/api/admin/loop/status")
+    assert status_res.status_code == 200

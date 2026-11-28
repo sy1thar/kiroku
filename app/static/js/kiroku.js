@@ -212,4 +212,123 @@
       }
     });
   }
+
+  // Global Background Loop Poller & Mini-Window (Admin only)
+  const miniBox = document.getElementById("kiroku-loop-mini");
+  if (miniBox) {
+    const miniLocale = miniBox.dataset.locale || "ru";
+    const miniDot = document.getElementById("loop-mini-dot");
+    const miniTitle = document.getElementById("loop-mini-title");
+    const miniStop = document.getElementById("loop-mini-stop");
+    const miniClose = document.getElementById("loop-mini-close");
+    const miniInfo = document.getElementById("loop-mini-info");
+    const miniBar = document.getElementById("loop-mini-bar");
+    const miniStats = document.getElementById("loop-mini-stats");
+    const miniLink = document.getElementById("loop-mini-link");
+    const listeners = [];
+    let pollTimer = null;
+    let dismissed = false;
+    let seenActive = false;
+
+    const kindNames = {
+      titles: miniLocale === "ru" ? "Импорт тайтлов" : "Titles Loop",
+      characters_all: miniLocale === "ru" ? "Импорт персонажей" : "Characters Loop",
+      media_characters: miniLocale === "ru" ? "Персонажи тайтла" : "Title Characters",
+      translate: miniLocale === "ru" ? "Локализация (RU)" : "Localization",
+    };
+
+    function renderMini(data) {
+      if (!data) return;
+      if (data.active) {
+        dismissed = false;
+        seenActive = true;
+      }
+      const shouldShow = data.active || (seenActive && !dismissed && data.status && data.status !== "idle");
+      miniBox.style.display = shouldShow ? "flex" : "none";
+      if (shouldShow) {
+        miniTitle.textContent = kindNames[data.kind] || (miniLocale === "ru" ? "Цикл" : "Loop");
+        miniDot.style.display = data.active ? "inline-block" : "none";
+        miniStop.style.display = data.active ? "inline-flex" : "none";
+        miniStop.disabled = Boolean(data.stop_requested);
+        miniClose.style.display = data.active ? "none" : "inline-flex";
+        let statusTag = "";
+        if (data.status === "completed") statusTag = miniLocale === "ru" ? "✅ Готово · " : "✅ Done · ";
+        else if (data.status === "stopped") statusTag = miniLocale === "ru" ? "⏹ Остановлено · " : "⏹ Stopped · ";
+        else if (data.status === "error") statusTag = "⚠ ";
+        miniInfo.textContent = statusTag + (data.current_label || "");
+        miniBar.style.width = `${data.progress_pct || 0}%`;
+        miniStats.textContent =
+          (miniLocale === "ru" ? "Волна #" : "Wave #") +
+          (data.wave || 0) +
+          " · +" +
+          (data.added_total || 0);
+        if (data.kind === "media_characters" && data.media_slug) {
+          miniLink.href = `/${miniLocale}/media/${data.media_slug}`;
+        } else if (data.kind === "translate") {
+          miniLink.href = `/${miniLocale}/admin`;
+        } else {
+          miniLink.href = `/${miniLocale}/import`;
+        }
+      }
+      listeners.forEach((fn) => {
+        try { fn(data); } catch (e) { console.error(e); }
+      });
+    }
+
+    async function pollLoopStatus() {
+      clearTimeout(pollTimer);
+      try {
+        const res = await fetch("/api/admin/loop/status", { cache: "no-store" });
+        if (res.ok) {
+          const data = await res.json();
+          renderMini(data);
+          if (data.active) {
+            pollTimer = setTimeout(pollLoopStatus, 1400);
+          }
+        }
+      } catch (e) {
+        console.error(e);
+      }
+    }
+
+    window.KirokuLoop = {
+      async start(payload) {
+        dismissed = false;
+        seenActive = true;
+        const res = await fetch("/api/admin/loop/start", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          showToast(data.detail || "Failed to start loop");
+          return { ok: false, data };
+        }
+        renderMini(data);
+        clearTimeout(pollTimer);
+        pollTimer = setTimeout(pollLoopStatus, 1000);
+        return { ok: true, data };
+      },
+      async stop() {
+        miniStop.disabled = true;
+        const res = await fetch("/api/admin/loop/stop", { method: "POST" });
+        const data = await res.json().catch(() => ({}));
+        renderMini(data);
+        clearTimeout(pollTimer);
+        pollTimer = setTimeout(pollLoopStatus, 800);
+        return data;
+      },
+      dismiss() {
+        dismissed = true;
+        miniBox.style.display = "none";
+      },
+      refresh: pollLoopStatus,
+      onStatus(fn) {
+        listeners.push(fn);
+      },
+    };
+
+    pollLoopStatus();
+  }
 })();

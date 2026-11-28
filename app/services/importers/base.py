@@ -100,6 +100,7 @@ async def upsert_media_from_external(
     synopsis_en: str = "",
     title_ru: str = "",
     synopsis_ru: str = "",
+    target_locale: str = "ru",
 ) -> Media:
     mapping = db.scalar(
         select(ExternalMapping).where(
@@ -158,23 +159,33 @@ async def upsert_media_from_external(
     clean_en = clean_html_markup(synopsis_en)
     _ensure_media_translation(db, media.id, "en", canonical_title, clean_en, "api_raw")
 
-    resolved_title_ru = title_ru.strip()
-    if not resolved_title_ru:
-        resolved_title_ru, _ = await translate_text(canonical_title, "ru")
+    if target_locale == "ru":
+        resolved_title_ru = title_ru.strip()
+        if not resolved_title_ru:
+            resolved_title_ru, _ = await translate_text(canonical_title, "ru")
 
-    ru_synopsis = synopsis_ru.strip()
-    ru_source = "community_verified" if ru_synopsis else "ai_draft"
-    if not ru_synopsis and clean_en:
-        ru_synopsis, ru_source = await translate_text(clean_en, "ru")
+        ru_synopsis = synopsis_ru.strip()
+        ru_source = "community_verified" if ru_synopsis else "ai_draft"
+        if not ru_synopsis and clean_en:
+            ru_synopsis, ru_source = await translate_text(clean_en, "ru")
 
-    _ensure_media_translation(
-        db,
-        media.id,
-        "ru",
-        resolved_title_ru or canonical_title,
-        ru_synopsis,
-        ru_source,
-    )
+        _ensure_media_translation(
+            db,
+            media.id,
+            "ru",
+            resolved_title_ru or canonical_title,
+            ru_synopsis,
+            ru_source,
+        )
+    else:
+        _ensure_media_translation(
+            db,
+            media.id,
+            "ru",
+            title_ru.strip() or canonical_title,
+            synopsis_ru.strip(),
+            "api_raw",
+        )
     db.flush()
     return media
 
@@ -227,6 +238,7 @@ async def upsert_character_from_external(
     name_ru: str = "",
     bio_ru: str = "",
     translate_bio: bool = True,
+    target_locale: str = "ru",
     popularity: int = 0,
     media_id: int | None = None,
     role: str = "supporting",
@@ -280,26 +292,36 @@ async def upsert_character_from_external(
 
     _ensure_char_translation(db, character.id, "en", canonical_name, clean_bio, "api_raw")
 
-    resolved_name_ru = name_ru.strip()
-    if not resolved_name_ru:
-        resolved_name_ru = await fetch_shikimori_character_ru(canonical_name)
-    if not resolved_name_ru:
-        resolved_name_ru, _ = await translate_text(canonical_name, "ru")
+    if target_locale == "ru":
+        resolved_name_ru = name_ru.strip()
+        if not resolved_name_ru:
+            resolved_name_ru = await fetch_shikimori_character_ru(canonical_name)
+        if not resolved_name_ru:
+            resolved_name_ru, _ = await translate_text(canonical_name, "ru")
 
-    if bio_ru.strip():
-        ru_bio, ru_source = bio_ru.strip(), "ai_draft"
-    elif translate_bio and clean_bio:
-        ru_bio, ru_source = await translate_text(clean_bio, "ru")
+        if bio_ru.strip():
+            ru_bio, ru_source = bio_ru.strip(), "ai_draft"
+        elif translate_bio and clean_bio:
+            ru_bio, ru_source = await translate_text(clean_bio, "ru")
+        else:
+            ru_bio, ru_source = clean_bio, "api_raw"
+        _ensure_char_translation(
+            db,
+            character.id,
+            "ru",
+            resolved_name_ru or canonical_name,
+            ru_bio,
+            ru_source,
+        )
     else:
-        ru_bio, ru_source = clean_bio, "api_raw"
-    _ensure_char_translation(
-        db,
-        character.id,
-        "ru",
-        resolved_name_ru or canonical_name,
-        ru_bio,
-        ru_source,
-    )
+        _ensure_char_translation(
+            db,
+            character.id,
+            "ru",
+            name_ru.strip() or canonical_name,
+            bio_ru.strip(),
+            "api_raw",
+        )
 
     if media_id is not None:
         link = db.scalar(

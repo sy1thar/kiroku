@@ -50,6 +50,7 @@ class Media(Base):
     banner_url: Mapped[str] = mapped_column(String(500), default="")
     total_units: Mapped[int | None] = mapped_column(Integer, nullable=True)
     unit_label: Mapped[str] = mapped_column(String(16), default="ep")  # ep, ch, hr
+    characters_exhausted: Mapped[bool] = mapped_column(Boolean, default=False)
     genres: Mapped[list[str]] = mapped_column(JSON, default=list)
     platforms: Mapped[list[str]] = mapped_column(JSON, default=list)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

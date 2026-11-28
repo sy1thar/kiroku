@@ -110,6 +110,30 @@ def get_profile_key(request: Request, db: Session) -> tuple[str, User | None]:
     return "guest", None
 
 
+def resolve_request_locale(
+    request: Request,
+    db: Session | None = None,
+    explicit: str | None = None,
+) -> str:
+    """Resolve effective site locale from explicit value, cookie, logged-in settings, or referer."""
+    if explicit in ("ru", "en"):
+        return explicit
+    c_lang = request.cookies.get("kiroku_locale")
+    if c_lang in ("ru", "en"):
+        return c_lang
+    if db is not None:
+        user = get_current_user(request, db)
+        if user and user.preferred_locale in ("ru", "en"):
+            return user.preferred_locale
+    referer = request.headers.get("referer") or ""
+    if "/en/" in referer or referer.endswith("/en"):
+        return "en"
+    if "/ru/" in referer or referer.endswith("/ru"):
+        return "ru"
+    default_loc = get_settings().default_locale
+    return default_loc if default_loc in ("ru", "en") else "ru"
+
+
 def register_user(db: Session, *, username: str, email: str, password: str) -> User:
     clean_username = username.strip()
     clean_email = email.strip().lower()

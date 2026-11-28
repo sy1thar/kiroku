@@ -86,6 +86,27 @@
     {% block content %}{% endblock %}
   </main>
 
+  {% if current_user and current_user.role == 'admin' %}
+  <div id="kiroku-loop-mini" class="loop-mini-widget" data-locale="{{ locale }}" style="display:none;">
+    <div class="loop-mini-head">
+      <div style="display:flex; align-items:center; gap:7px;">
+        <span id="loop-mini-dot" class="loop-mini-dot"></span>
+        <span id="loop-mini-title">{{ "Цикл импорта" if locale == "ru" else "Import Loop" }}</span>
+      </div>
+      <div style="display:flex; align-items:center; gap:6px;">
+        <button id="loop-mini-stop" type="button" class="btn btn-secondary btn-sm" style="display:none; color:#fda4af; padding:3px 9px; font-size:0.76rem;" onclick="window.KirokuLoop && window.KirokuLoop.stop()">{{ "⏹ Стоп" if locale == "ru" else "⏹ Stop" }}</button>
+        <button id="loop-mini-close" type="button" class="btn btn-secondary btn-sm" style="display:none; padding:2px 8px; font-size:0.78rem;" onclick="window.KirokuLoop && window.KirokuLoop.dismiss()">×</button>
+      </div>
+    </div>
+    <div id="loop-mini-info" style="color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;"></div>
+    <div class="loop-mini-bar-wrap"><div id="loop-mini-bar" class="loop-mini-bar"></div></div>
+    <div style="display:flex; align-items:center; justify-content:space-between; font-size:0.78rem; color:var(--muted);">
+      <span id="loop-mini-stats"></span>
+      <a id="loop-mini-link" href="/{{ locale }}/import" style="color:var(--accent);">{{ "Открыть →" if locale == "ru" else "Open →" }}</a>
+    </div>
+  </div>
+  {% endif %}
+
   <div id="kiroku-toast" class="toast"></div>
   <script src="/static/js/kiroku.js"></script>
   {% block scripts %}{% endblock %}

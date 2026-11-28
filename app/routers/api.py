@@ -32,6 +32,7 @@ from app.schemas import (
     CustomRoleCreateRequest,
     ImportQueryRequest,
     LoginRequest,
+    LoopStartRequest,
     PasswordChangeRequest,
     RegisterRequest,
     RevisionCreateRequest,
@@ -50,6 +51,7 @@ from app.services.auth import (
     require_admin,
     require_moderator_or_admin,
     require_user,
+    resolve_request_locale,
     update_user_profile,
 )
 from app.services.catalog import (
@@ -66,13 +68,14 @@ from app.services.importers.anilist import import_from_anilist, import_more_char
 from app.services.importers.batch import run_batch_import
 from app.services.importers.igdb import IGDBNotConfiguredError, import_from_igdb
 from app.services.importers.vndb import import_from_vndb
-from app.services.search import global_search
-from app.services.translation import (
-    _has_cyrillic,
-    fetch_shikimori_character_ru,
-    fetch_shikimori_ru,
-    translate_text,
+from app.services.loop_manager import (
+    get_loop_status,
+    request_stop_loop,
+    set_loop_db_provider,
+    start_background_loop,
+    translate_missing_wave,
 )
+from app.services.search import global_search
 
 router = APIRouter(prefix="/api", tags=["api"])
 
@@ -231,6 +234,7 @@ def api_me(request: Request, db: Session = Depends(get_db)):
 def api_update_profile(
     payload: AccountProfileUpdateRequest,
     request: Request,
+    response: Response,
     db: Session = Depends(get_db),
 ):
     user = require_user(request, db)
@@ -246,6 +250,7 @@ def api_update_profile(
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    response.set_cookie("kiroku_locale", updated.preferred_locale, max_age=60 * 60 * 24 * 365, samesite="lax")
     return {
         "id": updated.id,
         "username": updated.username,
@@ -326,7 +331,8 @@ def api_add_custom_trait(
     if not link:
         db.add(CharacterTrait(character_id=ch.id, trait_id=trait.id, votes_count=1))
         db.commit()
-    return {"trait_slug": trait.slug, "name": trait.name_ru, "category": trait.category}
+    loc = resolve_request_locale(request, db) if request else "ru"
+    return {"trait_slug": trait.slug, "name": trait.name_ru if loc == "ru" else trait.name_en, "category": trait.category}
 
 
 @router.post("/traits/vote")
@@ -444,8 +450,9 @@ async def api_import_batch(
     db: Session = Depends(get_db),
 ):
     require_admin(request, db)
+    loc = resolve_request_locale(request, db, payload.locale)
     try:
-        result = await run_batch_import(db, category=payload.category, count=payload.count)
+        result = await run_batch_import(db, category=payload.category, count=payload.count, locale=loc)
     except httpx.HTTPError as exc:
         raise HTTPException(status_code=502, detail=f"Upstream API error: {exc}") from exc
     except ValueError as exc:
@@ -460,6 +467,7 @@ async def api_import_external(
     db: Session = Depends(get_db),
 ):
     require_admin(request, db)
+    loc = resolve_request_locale(request, db, payload.locale)
     try:
         if payload.provider == "anilist":
             items = await import_from_anilist(
@@ -467,11 +475,12 @@ async def api_import_external(
                 query=payload.query,
                 media_type=payload.media_type,
                 limit=payload.limit,
+                locale=loc,
             )
         elif payload.provider == "vndb":
-            items = await import_from_vndb(db, query=payload.query, limit=payload.limit)
+            items = await import_from_vndb(db, query=payload.query, limit=payload.limit, locale=loc)
         elif payload.provider == "igdb":
-            items = await import_from_igdb(db, query=payload.query, limit=payload.limit)
+            items = await import_from_igdb(db, query=payload.query, limit=payload.limit, locale=loc)
         else:
             raise HTTPException(status_code=400, detail="Unsupported provider")
     except IGDBNotConfiguredError as exc:
@@ -648,12 +657,13 @@ async def api_admin_import_media_characters(
     db: Session = Depends(get_db),
 ):
     require_admin(request, db)
+    loc = resolve_request_locale(request, db, payload.locale)
     try:
         res = await import_more_characters_for_media(
             db,
             media_id,
             count=payload.count,
-            locale=payload.locale,
+            locale=loc,
             start_page=payload.start_page,
         )
     except ValueError as exc:
@@ -665,74 +675,45 @@ async def api_admin_import_media_characters(
 
 @router.post("/admin/translate-missing")
 async def api_admin_translate_missing(request: Request, db: Session = Depends(get_db)):
-    """Localize up to 15 untranslated titles/descriptions & 20 characters (names + bios) per click."""
-    from app.services.importers.base import clean_html_markup
-
+    """Localize untranslated titles/descriptions & characters to Russian in one fast concurrent wave."""
     require_admin(request, db)
-    fixed_media = 0
-    fixed_chars = 0
-
-    media_rows = db.scalars(select(Media).options(selectinload(Media.translations))).all()
-    for m in media_rows:
-        if fixed_media >= 15:
-            break
-        if m.slug in ("elden-ring-game", "persona-5-royal-game"):
-            continue
-        ru_tr = next((t for t in m.translations if t.locale == "ru"), None)
-        en_tr = next((t for t in m.translations if t.locale == "en"), None)
-        if not ru_tr:
-            continue
-        needs_title = not _has_cyrillic(ru_tr.title)
-        needs_syn = bool(en_tr and en_tr.synopsis and not _has_cyrillic(ru_tr.synopsis))
-        if not needs_title and not needs_syn:
-            continue
-
-        kind = "animes" if m.media_type == "anime" else "mangas"
-        ru_title, ru_desc = await fetch_shikimori_ru(kind=kind, search_title=m.canonical_title)
-        if needs_title:
-            if not ru_title:
-                ru_title, _ = await translate_text(m.canonical_title, "ru")
-            if ru_title and _has_cyrillic(ru_title):
-                ru_tr.title = ru_title
-        if needs_syn:
-            if ru_desc and _has_cyrillic(ru_desc):
-                ru_tr.synopsis = ru_desc
-                ru_tr.source = "community_verified"
-            elif en_tr and en_tr.synopsis:
-                tr_syn, src = await translate_text(clean_html_markup(en_tr.synopsis), "ru")
-                if tr_syn and _has_cyrillic(tr_syn):
-                    ru_tr.synopsis = tr_syn
-                    ru_tr.source = src
-        fixed_media += 1
-
-    char_rows = db.scalars(select(Character).options(selectinload(Character.translations))).all()
-    for c in char_rows:
-        if fixed_chars >= 20:
-            break
-        ru_tr = next((t for t in c.translations if t.locale == "ru"), None)
-        en_tr = next((t for t in c.translations if t.locale == "en"), None)
-        if not ru_tr:
-            continue
-        needs_name = not _has_cyrillic(ru_tr.name)
-        needs_bio = bool(en_tr and en_tr.bio and not _has_cyrillic(ru_tr.bio))
-        if not needs_name and not needs_bio:
-            continue
-        if needs_name:
-            rn = await fetch_shikimori_character_ru(c.canonical_name)
-            if not rn:
-                rn, _ = await translate_text(c.canonical_name, "ru")
-            if rn and _has_cyrillic(rn):
-                ru_tr.name = rn
-        if needs_bio and en_tr and en_tr.bio:
-            clean_en_bio = clean_html_markup(en_tr.bio)
-            rb, src = await translate_text(clean_en_bio[:1400], "ru")
-            if rb and _has_cyrillic(rb):
-                ru_tr.bio = rb
-                ru_tr.source = src
-        fixed_chars += 1
-
-    db.commit()
+    fixed_media, fixed_chars = await translate_missing_wave(db, target_locale="ru")
     return {"translated_media": fixed_media, "translated_characters": fixed_chars}
+
+
+@router.get("/admin/loop/status")
+def api_admin_loop_status(request: Request, db: Session = Depends(get_db)):
+    require_admin(request, db)
+    return get_loop_status()
+
+
+@router.post("/admin/loop/start")
+async def api_admin_loop_start(
+    payload: LoopStartRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    require_admin(request, db)
+    loc = resolve_request_locale(request, db, payload.locale)
+    set_loop_db_provider(request.app.dependency_overrides.get(get_db))
+    try:
+        return start_background_loop(
+            kind=payload.kind,
+            categories=payload.categories,
+            media_id=payload.media_id,
+            batch_size=payload.batch_size,
+            max_items=payload.max_items,
+            delay_ms=payload.delay_ms,
+            locale=loc,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/admin/loop/stop")
+def api_admin_loop_stop(request: Request, db: Session = Depends(get_db)):
+    require_admin(request, db)
+    return request_stop_loop()
 
 
 @router.get("/admin/custom-roles")

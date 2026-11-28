@@ -707,11 +707,29 @@ def test_shikimori_similarity_guard_and_long_title_safety(client: TestClient, mo
                 return "Ван-Пис", "Приключения пиратов за сокровищем."
             return "", ""
 
+        async def _mock_wiki(title, media_type=""):
+            if title == "Supernatural":
+                return "Сверхъестественное"
+            return ""
+
+        sup = Media(
+            slug="supernatural-repair-test",
+            media_type="series",
+            canonical_title="Supernatural",
+            popularity=5000,
+        )
+        db.add(sup)
+        db.flush()
+        db.add(MediaTranslation(media_id=sup.id, locale="ru", title="Supernatural", synopsis="", source="api_raw"))
+        db.commit()
+
         monkeypatch.setattr("app.services.loop_manager.fetch_shikimori_ru", _mock_shiki)
+        monkeypatch.setattr("app.services.loop_manager.fetch_wikipedia_ru", _mock_wiki)
         _scanned, fixed = asyncio.run(repair_translations_wave(db, offset=0, limit=50))
-        assert fixed >= 1
+        assert fixed >= 2
         db.refresh(op)
-        ru_tr = next(t for t in op.translations if t.locale == "ru")
-        assert ru_tr.title == "Ван-Пис"
+        db.refresh(sup)
+        assert next(t for t in op.translations if t.locale == "ru").title == "Ван-Пис"
+        assert next(t for t in sup.translations if t.locale == "ru").title == "Сверхъестественное"
     finally:
         db_gen.close()

@@ -15,6 +15,7 @@ from app.services.translation import (
     _has_cyrillic,
     fetch_shikimori_character_ru,
     fetch_shikimori_ru,
+    fetch_wikipedia_ru,
     translate_text,
 )
 
@@ -441,12 +442,16 @@ async def repair_translations_wave(db: Session, offset: int = 0, limit: int = 25
                     new_s, _ = await translate_text(clean_html_markup(en_tr.synopsis)[:1400], "ru")
                 return (m, ru_tr, new_t, new_s, "community_verified")
 
-            needs_repair = (not _has_cyrillic(ru_tr.title)) or (ru_tr.source == "community_verified" and is_shiki_type)
+            absurd_shiki = len(ru_tr.title or "") > (len(m.canonical_title or "") * 2.3 + 25)
+            needs_repair = (not _has_cyrillic(ru_tr.title)) or (ru_tr.source == "community_verified" and is_shiki_type) or absurd_shiki
             needs_syn = bool(en_tr and en_tr.synopsis and (not _has_cyrillic(ru_tr.synopsis) or needs_repair))
             if not needs_repair and not needs_syn:
                 return None
 
-            t_coro = translate_text(m.canonical_title, "ru") if needs_repair else asyncio.sleep(0, result=(ru_tr.title, ru_tr.source))
+            wiki_ru = await fetch_wikipedia_ru(m.canonical_title, m.media_type) if (needs_repair and not is_shiki_type) else ""
+            t_coro = asyncio.sleep(0, result=(wiki_ru, "community_verified")) if wiki_ru else (
+                translate_text(m.canonical_title, "ru") if needs_repair else asyncio.sleep(0, result=(ru_tr.title, ru_tr.source))
+            )
             s_coro = (
                 translate_text(clean_html_markup(en_tr.synopsis)[:1400], "ru")
                 if (needs_syn and en_tr and en_tr.synopsis)
@@ -496,6 +501,37 @@ async def _run_repair_loop(locale: str, delay_ms: int) -> None:
         if delay_ms > 0:
             await _sleep_interruptible(delay_ms / 1000.0)
     await _run_translate_loop(locale, delay_ms)
+
+
+async def run_startup_repair() -> None:
+    """Background pass executed automatically on production boot to fix corrupted/untranslated DB rows."""
+    await asyncio.sleep(2.0)
+    offset = 0
+    batch = 25
+    while True:
+        db, gen = _open_session()
+        try:
+            scanned, _fixed = await repair_translations_wave(db, offset=offset, limit=batch)
+        except Exception:
+            break
+        finally:
+            _close_session(db, gen)
+        if scanned < batch:
+            break
+        offset += batch
+        await asyncio.sleep(0.35)
+
+    for _ in range(40):
+        db, gen = _open_session()
+        try:
+            m_cnt, c_cnt = await translate_missing_wave(db, target_locale="ru")
+        except Exception:
+            break
+        finally:
+            _close_session(db, gen)
+        if m_cnt == 0 and c_cnt == 0:
+            break
+        await asyncio.sleep(0.35)
 
 
 async def _execute_loop(

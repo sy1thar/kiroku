@@ -33,7 +33,7 @@ def _get_shiki_sem() -> asyncio.Semaphore:
     loop = asyncio.get_running_loop()
     sem = _LOOP_SEMS.get(loop)
     if sem is None:
-        sem = asyncio.Semaphore(5)
+        sem = asyncio.Semaphore(3)
         _LOOP_SEMS[loop] = sem
     return sem
 
@@ -42,7 +42,7 @@ def _get_tr_sem() -> asyncio.Semaphore:
     loop = asyncio.get_running_loop()
     sem = _LOOP_TR_SEMS.get(loop)
     if sem is None:
-        sem = asyncio.Semaphore(6)
+        sem = asyncio.Semaphore(4)
         _LOOP_TR_SEMS[loop] = sem
     return sem
 
@@ -101,9 +101,73 @@ async def _shiki_get(client: httpx.AsyncClient, url: str, params: dict | None = 
     async with _get_shiki_sem():
         resp = await client.get(url, params=params, headers=_SHIKI_HEADERS)
         if resp.status_code == 429:
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(0.8)
+            resp = await client.get(url, params=params, headers=_SHIKI_HEADERS)
+        if resp.status_code == 429:
+            await asyncio.sleep(1.6)
             resp = await client.get(url, params=params, headers=_SHIKI_HEADERS)
         return resp
+
+
+_WIKI_UA = {"User-Agent": "KirokuEncyclopediaBot/1.0 (https://kiroku-w1mf.onrender.com)"}
+_WIKI_CACHE: dict[tuple[str, str], str] = {}
+
+
+def _clean_wiki_ru_title(raw: str) -> str:
+    return re.sub(r"\s*\([^)]*\)\s*$", "", (raw or "").strip()).strip()
+
+
+async def fetch_wikipedia_ru(title: str, media_type: str = "") -> str:
+    """Resolve official Russian title via English Wikipedia langlinks (no API key, cloud-friendly)."""
+    clean = (title or "").strip()
+    if not clean:
+        return ""
+    key = (clean.lower(), media_type)
+    if key in _WIKI_CACHE:
+        return _WIKI_CACHE[key]
+
+    suffixes = {
+        "series": [f"{clean} (American TV series)", f"{clean} (TV series)", clean],
+        "game": [f"{clean} (video game)", clean],
+        "vn": [f"{clean} (visual novel)", clean],
+    }.get(media_type, [clean])
+
+    try:
+        client = _get_pooled_client()
+        resp = await client.get(
+            "https://en.wikipedia.org/w/api.php",
+            params={
+                "action": "query",
+                "format": "json",
+                "titles": "|".join(suffixes),
+                "prop": "langlinks",
+                "lllang": "ru",
+                "redirects": 1,
+            },
+            headers=_WIKI_UA,
+        )
+        if resp.status_code == 200:
+            pages = ((resp.json().get("query") or {}).get("pages") or {}).values()
+            # Prefer qualified page title order (e.g., "(TV series)" over generic word article)
+            by_title: dict[str, str] = {}
+            for page in pages:
+                ll = page.get("langlinks") or []
+                if ll and page.get("title"):
+                    cleaned_ru = _clean_wiki_ru_title(ll[0].get("*") or "")
+                    if cleaned_ru and _has_cyrillic(cleaned_ru):
+                        by_title[page["title"]] = cleaned_ru
+            for cand in suffixes:
+                if cand in by_title:
+                    _cache_put(_WIKI_CACHE, key, by_title[cand])
+                    return by_title[cand]
+            if by_title:
+                first = next(iter(by_title.values()))
+                _cache_put(_WIKI_CACHE, key, first)
+                return first
+    except (httpx.HTTPError, ValueError, KeyError, TypeError):
+        pass
+    _cache_put(_WIKI_CACHE, key, "")
+    return ""
 
 
 async def fetch_shikimori_ru(
@@ -268,11 +332,17 @@ async def translate_text(text: str, target_locale: str) -> tuple[str, str]:
     is_mostly_ascii = bool(re.match(r"^[\x00-\x7F]+$", clean_text[:200]))
     src_lang = "en" if is_mostly_ascii else "auto"
 
+    def _polish_case(src: str, out_txt: str) -> str:
+        s = out_txt.strip()
+        if s and src and src[0].isupper() and s[0].islower():
+            return s[0].upper() + s[1:]
+        return s
+
     async with _get_tr_sem():
-        # Mirror 1: Google GTX (with 429 retry)
+        # Mirror 1: Google GTX (with 429 backoff retries)
         try:
             snippet = clean_text[:1800]
-            for attempt in range(2):
+            for attempt in range(3):
                 resp = await client.get(
                     "https://translate.googleapis.com/translate_a/single",
                     params={
@@ -283,13 +353,13 @@ async def translate_text(text: str, target_locale: str) -> tuple[str, str]:
                         "q": snippet,
                     },
                 )
-                if resp.status_code == 429 and attempt == 0:
-                    await asyncio.sleep(0.6)
+                if resp.status_code == 429 and attempt < 2:
+                    await asyncio.sleep(0.8 * (attempt + 1))
                     continue
                 if resp.status_code == 200:
                     data = resp.json()
                     chunks = [seg[0] for seg in (data[0] or []) if seg and seg[0]]
-                    translated = "".join(chunks).strip()
+                    translated = _polish_case(clean_text, "".join(chunks))
                     if translated and (target_locale != "ru" or _has_cyrillic(translated)):
                         out = (translated, "ai_draft")
                         _cache_put(_TEXT_CACHE, cache_key, out)
@@ -311,7 +381,7 @@ async def translate_text(text: str, target_locale: str) -> tuple[str, str]:
                 if isinstance(payload, list) and payload:
                     first = payload[0]
                     translated = first[0] if isinstance(first, list) else str(first)
-                translated = (translated or "").strip()
+                translated = _polish_case(clean_text, translated)
                 if translated and (target_locale != "ru" or _has_cyrillic(translated)):
                     out = (translated, "ai_draft")
                     _cache_put(_TEXT_CACHE, cache_key, out)
@@ -327,7 +397,10 @@ async def translate_text(text: str, target_locale: str) -> tuple[str, str]:
                 params={"q": snippet, "langpair": f"en|{target_locale}"},
             )
             if resp.status_code == 200:
-                translated = ((resp.json().get("responseData") or {}).get("translatedText") or "").strip()
+                translated = _polish_case(
+                    clean_text,
+                    (resp.json().get("responseData") or {}).get("translatedText") or "",
+                )
                 if translated and "MYMEMORY WARNING" not in translated and (target_locale != "ru" or _has_cyrillic(translated)):
                     out = (translated, "ai_draft")
                     _cache_put(_TEXT_CACHE, cache_key, out)

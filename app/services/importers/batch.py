@@ -11,15 +11,23 @@ from app.services.importers.base import (
     upsert_character_from_external,
     upsert_media_from_external,
 )
-from app.services.translation import translate_text
+from app.services.translation import fetch_wikipedia_ru, translate_text
 
 
-async def _translate_pair_if_needed(title_en: str, desc_en: str, locale: str) -> tuple[str, str]:
-    """Concurrently translate a title and short description when target locale is Russian."""
+async def _translate_pair_if_needed(
+    title_en: str,
+    desc_en: str,
+    locale: str,
+    media_type: str = "",
+) -> tuple[str, str]:
+    """Concurrently translate a title (using Wikipedia RU when available) and description for RU locale."""
     if locale != "ru":
         return title_en, ""
     clean_desc = clean_html_markup(desc_en)[:1200]
-    t_coro = translate_text(title_en, "ru") if title_en else asyncio.sleep(0, result=("", "api_raw"))
+    wiki_ru = await fetch_wikipedia_ru(title_en, media_type) if (title_en and media_type in ("series", "game", "vn")) else ""
+    t_coro = asyncio.sleep(0, result=(wiki_ru, "community_verified")) if wiki_ru else (
+        translate_text(title_en, "ru") if title_en else asyncio.sleep(0, result=("", "api_raw"))
+    )
     d_coro = translate_text(clean_desc, "ru") if clean_desc else asyncio.sleep(0, result=("", "api_raw"))
     (tr_t, _), (tr_d, _) = await asyncio.gather(t_coro, d_coro)
     return (tr_t or title_en), tr_d
@@ -397,12 +405,12 @@ async def import_batch_from_series(db: Session, count: int = 10, locale: str = "
 
     loc_sem = asyncio.Semaphore(14)
 
-    async def _loc_item(title_s: str, desc_s: str) -> tuple[str, str]:
+    async def _loc_item(title_s: str, desc_s: str, mtype: str = "") -> tuple[str, str]:
         async with loc_sem:
-            return await _translate_pair_if_needed(title_s, desc_s, locale)
+            return await _translate_pair_if_needed(title_s, desc_s, locale, media_type=mtype)
 
     show_locs = await asyncio.gather(
-        *[_loc_item(s.get("name") or "Untitled Series", s.get("summary") or "") for s in new_shows]
+        *[_loc_item(s.get("name") or "Untitled Series", s.get("summary") or "", "series") for s in new_shows]
     )
     flat_cast = [(i, j, entry) for i, cast in enumerate(cast_lists) for j, entry in enumerate(cast) if (entry.get("character") or {}).get("id")]
     cast_locs = await asyncio.gather(

@@ -1,3 +1,4 @@
+import asyncio
 from contextlib import asynccontextmanager
 from pathlib import Path
 from fastapi import FastAPI
@@ -8,6 +9,7 @@ from app.config import get_settings
 from app.database import SessionLocal, init_db
 from app.routers import api, web
 from app.seed import seed_if_empty
+from app.services.loop_manager import run_startup_repair
 
 
 @asynccontextmanager
@@ -15,7 +17,14 @@ async def lifespan(_app: FastAPI):
     init_db()
     with SessionLocal() as db:
         seed_if_empty(db)
-    yield
+    repair_task = None
+    if get_settings().app_env == "production":
+        repair_task = asyncio.create_task(run_startup_repair())
+    try:
+        yield
+    finally:
+        if repair_task and not repair_task.done():
+            repair_task.cancel()
 
 
 def create_app() -> FastAPI:

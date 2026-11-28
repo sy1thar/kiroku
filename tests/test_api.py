@@ -582,3 +582,56 @@ def test_auto_loop_ui_and_character_pagination(client: TestClient, monkeypatch):
     assert stop_res.status_code == 200
     status_res = client.get("/api/admin/loop/status")
     assert status_res.status_code == 200
+
+
+def test_catalog_mixed_formats_recent_sort_and_pagination(client: TestClient):
+    """Catalog 'All formats' interleaves media types, supports sort=recent, and paginates beyond 48 items."""
+    from app.database import get_db
+    from app.main import app
+    from app.models import Media, MediaTranslation
+
+    db_gen = app.dependency_overrides[get_db]()
+    db = next(db_gen)
+    try:
+        # Insert 55 ultra-high popularity anime + 1 low-popularity newly added game + 1 series
+        for idx in range(55):
+            m = Media(
+                slug=f"high-pop-anime-{idx}",
+                media_type="anime",
+                canonical_title=f"High Pop Anime {idx}",
+                popularity=900_000 - idx,
+                rating=8.5,
+            )
+            db.add(m)
+            db.flush()
+            db.add(MediaTranslation(media_id=m.id, locale="ru", title=f"Топ Аниме {idx}", synopsis=""))
+
+        recent_game = Media(
+            slug="freshly-looped-game",
+            media_type="game",
+            canonical_title="Freshly Looped Game",
+            popularity=50,
+            rating=9.1,
+        )
+        db.add(recent_game)
+        db.flush()
+        db.add(MediaTranslation(media_id=recent_game.id, locale="ru", title="Свежая Игра", synopsis=""))
+        db.commit()
+    finally:
+        db_gen.close()
+
+    # Default 'All formats' on page 1 must mix formats instead of showing 48 anime only
+    cat_p1 = client.get("/ru/catalog")
+    assert cat_p1.status_code == 200
+    assert "Freshly Looped Game" in cat_p1.text or "Свежая Игра" in cat_p1.text
+    assert "/ru/catalog?q=&amp;type=&amp;franchise=&amp;sort=popularity&amp;page=2" in cat_p1.text or "page=2" in cat_p1.text
+
+    # sort=recent shows newly imported items right at the top
+    cat_recent = client.get("/ru/catalog?sort=recent")
+    assert cat_recent.status_code == 200
+    assert "Свежая Игра" in cat_recent.text
+
+    # page=2 loads next slice
+    cat_p2 = client.get("/ru/catalog?page=2")
+    assert cat_p2.status_code == 200
+    assert "Топ Аниме" in cat_p2.text

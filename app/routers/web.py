@@ -37,6 +37,7 @@ from app.services.catalog import (
     get_voted_trait_slugs,
     list_characters,
     list_media,
+    list_media_paginated,
     pick_char_translation,
     pick_media_translation,
 )
@@ -156,16 +157,21 @@ def _render_catalog(
     franchise: str | None = None,
     genre: str | None = None,
     sort: str = "popularity",
+    page: int = 1,
 ) -> HTMLResponse:
-    items = list_media(
+    per_page = 48
+    items, total_count, type_counts = list_media_paginated(
         db,
         query=q or None,
         media_type=media_type or None,
         franchise_slug=franchise or None,
         genre=genre or None,
         sort=sort,
-        limit=60,
+        page=page,
+        per_page=per_page,
     )
+    total_pages = max(1, (total_count + per_page - 1) // per_page)
+    safe_page = min(max(1, page), total_pages)
     active_franchise = (
         db.scalar(select(Franchise).where(Franchise.slug == franchise))
         if franchise
@@ -175,6 +181,11 @@ def _render_catalog(
     ctx.update(
         {
             "items": items,
+            "total_count": total_count,
+            "all_media_count": sum(type_counts.values()),
+            "type_counts": type_counts,
+            "page": safe_page,
+            "total_pages": total_pages,
             "active_franchise": active_franchise,
             "selected_q": q or "",
             "selected_type": media_type or "",
@@ -194,9 +205,10 @@ def catalog_root(
     franchise: str | None = None,
     genre: str | None = None,
     sort: str = "popularity",
+    page: int = 1,
     db: Session = Depends(get_db),
 ):
-    return _render_catalog(request, _resolve_locale(request), db, q, type, franchise, genre, sort)
+    return _render_catalog(request, _resolve_locale(request), db, q, type, franchise, genre, sort, page)
 
 
 @router.get("/{locale}/catalog", response_class=HTMLResponse)
@@ -208,11 +220,12 @@ def catalog_localized(
     franchise: str | None = None,
     genre: str | None = None,
     sort: str = "popularity",
+    page: int = 1,
     db: Session = Depends(get_db),
 ):
     if locale not in ("ru", "en"):
         raise HTTPException(status_code=404)
-    return _render_catalog(request, locale, db, q, type, franchise, genre, sort)
+    return _render_catalog(request, locale, db, q, type, franchise, genre, sort, page)
 
 
 @router.get("/{locale}/media/{slug}", response_class=HTMLResponse)

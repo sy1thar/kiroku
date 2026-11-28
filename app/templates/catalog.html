@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block content %}
 <div class="section-head" style="margin-top:0;">
-  <h2>{{ active_franchise.canonical_name if active_franchise else ui.nav_catalog }}</h2>
+  <h2>{{ active_franchise.canonical_name if active_franchise else ui.nav_catalog }} <span style="font-size:0.95rem; color:var(--muted); font-weight:500;">({{ total_count }})</span></h2>
 </div>
 
 {% if active_franchise %}
@@ -39,15 +39,29 @@
   <div class="field-group">
     <label>{{ "Сортировка" if locale == "ru" else "Sort by" }}</label>
     <select name="sort">
-      <option value="popularity" {% if selected_sort == "popularity" %}selected{% endif %}>{{ "Популярность" if locale == "ru" else "Popularity" }}</option>
+      <option value="popularity" {% if selected_sort == "popularity" %}selected{% endif %}>{{ "Популярность (все форматы)" if locale == "ru" else "Popularity (mixed formats)" }}</option>
+      <option value="recent" {% if selected_sort == "recent" %}selected{% endif %}>{{ "Сначала недавно добавленные" if locale == "ru" else "Recently Added First" }}</option>
       <option value="rating" {% if selected_sort == "rating" %}selected{% endif %}>{{ "Рейтинг" if locale == "ru" else "Rating" }}</option>
-      <option value="newest" {% if selected_sort == "newest" %}selected{% endif %}>{{ "Сначала новые" if locale == "ru" else "Newest" }}</option>
+      <option value="newest" {% if selected_sort == "newest" %}selected{% endif %}>{{ "Год выхода (новые)" if locale == "ru" else "Release Year (Newest)" }}</option>
     </select>
   </div>
 
   <button class="btn btn-primary" type="submit">{{ ui.filter_apply }}</button>
   <a class="btn btn-secondary" href="/{{ locale }}/catalog">{{ ui.filter_reset }}</a>
 </form>
+
+<div style="display:flex; flex-wrap:wrap; gap:8px; margin-bottom:16px;">
+  <a class="badge {% if not selected_type %}btn-primary{% endif %}" href="/{{ locale }}/catalog?sort={{ selected_sort }}" style="padding:6px 12px;">
+    {{ ui.all_types }} · {{ all_media_count }}
+  </a>
+  {% for key, labels in media_type_labels.items() %}
+  {% if type_counts.get(key, 0) > 0 %}
+  <a class="badge badge-{{ key }}" href="/{{ locale }}/catalog?type={{ key }}&sort={{ selected_sort }}" style="padding:6px 12px; {% if selected_type == key %}outline:2px solid var(--accent);{% endif %}">
+    {{ labels[locale] }} · {{ type_counts.get(key, 0) }}
+  </a>
+  {% endif %}
+  {% endfor %}
+</div>
 
 {% if items %}
 <div class="grid-4">
@@ -74,6 +88,18 @@
   </a>
   {% endfor %}
 </div>
+
+{% if total_pages > 1 %}
+<div style="display:flex; align-items:center; justify-content:center; gap:10px; flex-wrap:wrap; margin-top:24px;">
+  {% if page > 1 %}
+  <a class="btn btn-secondary btn-sm" href="/{{ locale }}/catalog?q={{ selected_q|urlencode }}&type={{ selected_type }}&franchise={{ selected_franchise }}&sort={{ selected_sort }}&page={{ page - 1 }}">← {{ "Назад" if locale == "ru" else "Prev" }}</a>
+  {% endif %}
+  <span style="color:var(--muted); font-size:0.9rem;">{{ "Страница" if locale == "ru" else "Page" }} {{ page }} / {{ total_pages }}</span>
+  {% if page < total_pages %}
+  <a class="btn btn-secondary btn-sm" href="/{{ locale }}/catalog?q={{ selected_q|urlencode }}&type={{ selected_type }}&franchise={{ selected_franchise }}&sort={{ selected_sort }}&page={{ page + 1 }}">{{ "Дальше" if locale == "ru" else "Next" }} →</a>
+  {% endif %}
+</div>
+{% endif %}
 {% else %}
 <div class="panel">{{ ui.no_results }}</div>
 {% endif %}

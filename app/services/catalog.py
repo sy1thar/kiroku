@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from sqlalchemy import desc, select
+from sqlalchemy import desc, func, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.i18n import normalize_for_search, normalize_unicode_raw
@@ -70,6 +70,8 @@ def list_media(
         stmt = stmt.order_by(desc(Media.rating), desc(Media.popularity))
     elif sort == "newest":
         stmt = stmt.order_by(desc(Media.release_year), desc(Media.popularity))
+    elif sort == "recent":
+        stmt = stmt.order_by(desc(Media.id))
     else:
         stmt = stmt.order_by(desc(Media.popularity), desc(Media.rating))
 
@@ -89,6 +91,95 @@ def list_media(
         g_low = genre.lower()
         rows = [m for m in rows if any(g.lower() == g_low for g in (m.genres or []))]
     return rows[:limit]
+
+
+def list_media_paginated(
+    db: Session,
+    *,
+    query: str | None = None,
+    media_type: str | None = None,
+    franchise_slug: str | None = None,
+    genre: str | None = None,
+    sort: str = "popularity",
+    page: int = 1,
+    per_page: int = 48,
+) -> tuple[list[Media], int, dict[str, int]]:
+    """Return paginated media, total match count, and per-format counts."""
+    type_counts = {
+        mt: cnt
+        for mt, cnt in db.execute(
+            select(Media.media_type, func.count(Media.id)).group_by(Media.media_type)
+        ).all()
+    }
+
+    stmt = select(Media).options(
+        selectinload(Media.translations),
+        selectinload(Media.franchise),
+    )
+    if media_type:
+        stmt = stmt.where(Media.media_type == media_type)
+    if franchise_slug:
+        stmt = stmt.join(Franchise).where(Franchise.slug == franchise_slug)
+
+    if sort == "rating":
+        stmt = stmt.order_by(desc(Media.rating), desc(Media.popularity))
+    elif sort == "newest":
+        stmt = stmt.order_by(desc(Media.release_year), desc(Media.popularity))
+    elif sort == "recent":
+        stmt = stmt.order_by(desc(Media.id))
+    else:
+        stmt = stmt.order_by(desc(Media.popularity), desc(Media.rating))
+
+    safe_page = max(1, page)
+    offset = (safe_page - 1) * per_page
+
+    # Fast interleaved mix across all formats when viewing "All Types" by popularity
+    if not media_type and not franchise_slug and not query and not genre and sort == "popularity":
+        rows = list(db.scalars(stmt).all())
+        buckets: dict[str, list[Media]] = {}
+        for m in rows:
+            buckets.setdefault(m.media_type, []).append(m)
+        mixed: list[Media] = []
+        keys = list(buckets.keys())
+        idx = 0
+        while True:
+            added_any = False
+            for k in keys:
+                bucket = buckets[k]
+                if idx < len(bucket):
+                    mixed.append(bucket[idx])
+                    added_any = True
+            if not added_any:
+                break
+            idx += 1
+        return mixed[offset : offset + per_page], len(mixed), type_counts
+
+    if not query and not genre:
+        count_stmt = select(func.count(Media.id))
+        if media_type:
+            count_stmt = count_stmt.where(Media.media_type == media_type)
+        if franchise_slug:
+            count_stmt = count_stmt.join(Franchise).where(Franchise.slug == franchise_slug)
+        total = db.scalar(count_stmt) or 0
+        rows = list(db.scalars(stmt.offset(offset).limit(per_page)).all())
+        return rows, total, type_counts
+
+    rows = list(db.scalars(stmt).all())
+    if query and query.strip():
+        rows = [
+            m
+            for m in rows
+            if _matches_multilingual(
+                query,
+                [m.canonical_title, m.native_title]
+                + ([m.franchise.canonical_name] if m.franchise else [])
+                + [t.title for t in m.translations],
+            )
+        ]
+    if genre:
+        g_low = genre.lower()
+        rows = [m for m in rows if any(g.lower() == g_low for g in (m.genres or []))]
+    return rows[offset : offset + per_page], len(rows), type_counts
 
 
 def get_media_detail(db: Session, slug: str, profile_key: str = "guest") -> dict | None:

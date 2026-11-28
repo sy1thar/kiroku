@@ -226,52 +226,58 @@ async def translate_missing_wave(db: Session, target_locale: str = "ru") -> tupl
 
 
 async def _run_titles_loop(categories: list[str], batch_size: int, max_items: int, delay_ms: int, locale: str) -> None:
-    cats = categories or list(MEDIA_TYPE_LABELS.keys())
-    for idx, cat in enumerate(cats):
-        if _STATE.stop_requested:
-            break
-        label = MEDIA_TYPE_LABELS.get(cat, {}).get(locale, cat)
-        empty_streak = 0
-        while not _STATE.stop_requested:
+    cats = list(categories) if categories else list(MEDIA_TYPE_LABELS.keys())
+    active_cats = list(cats)
+    empty_streaks = {c: 0 for c in active_cats}
+    total_cats = len(active_cats)
+
+    while active_cats and not _STATE.stop_requested:
+        for cat in list(active_cats):
+            if _STATE.stop_requested:
+                break
             if max_items > 0 and _STATE.added_total >= max_items:
                 _STATE.stop_requested = True
                 break
+
+            label = MEDIA_TYPE_LABELS.get(cat, {}).get(locale, cat)
             _STATE.wave += 1
             _STATE.current_label = f"{label}"
 
-            async def _step():
+            async def _step(c_key: str = cat):
                 db, gen = _open_session()
                 try:
-                    return await run_batch_import(db, category=cat, count=batch_size, locale=locale)
+                    return await run_batch_import(db, category=c_key, count=batch_size, locale=locale)
                 finally:
                     _close_session(db, gen)
 
             res = await _with_retry(_step)
             if res is None or _STATE.stop_requested:
                 break
+
             added = int(res.get("imported_count") or 0)
             _STATE.added_total += added
             _STATE.cursors[cat] = int(res.get("next_page") or 1)
             _STATE.current_label = f"{label} · {'стр.' if locale == 'ru' else 'p.'} {res.get('page_imported')}"
             if res.get("items"):
                 _STATE.last_items = res["items"]
-            empty_streak = 0 if added > 0 else empty_streak + 1
+            empty_streaks[cat] = 0 if added > 0 else empty_streaks[cat] + 1
             _STATE.log(
                 f"[{label} · {'стр.' if locale == 'ru' else 'p.'} {res.get('page_imported')}] +{added}",
                 "ok" if added > 0 else "muted",
             )
+
+            if not res.get("has_next_page") or empty_streaks[cat] >= 20:
+                _STATE.log(f"[{label}] {'категория завершена' if locale == 'ru' else 'finished'}", "info")
+                active_cats.remove(cat)
+
             if max_items > 0:
                 _STATE.progress_pct = min(100, int((_STATE.added_total / max_items) * 100))
-            else:
-                _STATE.progress_pct = int(((idx + (0.5 if res.get("has_next_page") else 1.0)) / len(cats)) * 100)
+            elif total_cats > 0:
+                done_cats = total_cats - len(active_cats)
+                _STATE.progress_pct = min(99, max(5, int((done_cats / total_cats) * 100) or min(90, _STATE.wave * 4)))
 
-            if not res.get("has_next_page") or empty_streak >= 20:
-                _STATE.log(f"[{label}] {'категория завершена' if locale == 'ru' else 'finished'}", "info")
-                break
-            if delay_ms > 0:
+            if delay_ms > 0 and not _STATE.stop_requested:
                 await _sleep_interruptible(delay_ms / 1000.0)
-        if not _STATE.stop_requested:
-            _STATE.progress_pct = int(((idx + 1) / len(cats)) * 100)
 
 
 async def _run_characters_loop(

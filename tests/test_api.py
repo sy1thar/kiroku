@@ -623,6 +623,7 @@ def test_catalog_mixed_formats_recent_sort_and_pagination(client: TestClient):
     # Default 'All formats' on page 1 must mix formats instead of showing 48 anime only
     cat_p1 = client.get("/ru/catalog")
     assert cat_p1.status_code == 200
+    assert '<select name="type">' not in cat_p1.text
     assert "Freshly Looped Game" in cat_p1.text or "Свежая Игра" in cat_p1.text
     assert "/ru/catalog?q=&amp;type=&amp;franchise=&amp;sort=popularity&amp;page=2" in cat_p1.text or "page=2" in cat_p1.text
 

@@ -22,18 +22,12 @@
   {% if selected_franchise %}
   <input type="hidden" name="franchise" value="{{ selected_franchise }}" />
   {% endif %}
+  {% if selected_type %}
+  <input type="hidden" name="type" value="{{ selected_type }}" />
+  {% endif %}
   <div class="field-group" style="min-width:210px;">
     <label>{{ "Название" if locale == "ru" else "Title" }}</label>
     <input type="search" name="q" value="{{ selected_q }}" placeholder="{{ ui.search_placeholder }}" />
-  </div>
-  <div class="field-group">
-    <label>{{ ui.medium }}</label>
-    <select name="type">
-      <option value="">{{ ui.all_types }}</option>
-      {% for key, labels in media_type_labels.items() %}
-      <option value="{{ key }}" {% if selected_type == key %}selected{% endif %}>{{ labels[locale] }}</option>
-      {% endfor %}
-    </select>
   </div>
 
   <div class="field-group">
@@ -51,12 +45,12 @@
 </form>
 
 <div style="display:flex; flex-wrap:wrap; gap:8px; margin-bottom:16px;">
-  <a class="badge {% if not selected_type %}btn-primary{% endif %}" href="/{{ locale }}/catalog?sort={{ selected_sort }}" style="padding:6px 12px;">
+  <a class="badge {% if not selected_type %}btn-primary{% endif %}" href="/{{ locale }}/catalog?q={{ selected_q|urlencode }}&franchise={{ selected_franchise }}&sort={{ selected_sort }}" style="padding:6px 12px;">
     {{ ui.all_types }} · {{ all_media_count }}
   </a>
   {% for key, labels in media_type_labels.items() %}
   {% if type_counts.get(key, 0) > 0 %}
-  <a class="badge badge-{{ key }}" href="/{{ locale }}/catalog?type={{ key }}&sort={{ selected_sort }}" style="padding:6px 12px; {% if selected_type == key %}outline:2px solid var(--accent);{% endif %}">
+  <a class="badge badge-{{ key }}" href="/{{ locale }}/catalog?q={{ selected_q|urlencode }}&type={{ key }}&franchise={{ selected_franchise }}&sort={{ selected_sort }}" style="padding:6px 12px; {% if selected_type == key %}outline:2px solid var(--accent);{% endif %}">
     {{ labels[locale] }} · {{ type_counts.get(key, 0) }}
   </a>
   {% endif %}

@@ -58,7 +58,7 @@
 </div>
 
 {% if items %}
-<div class="grid-4">
+<div id="catalog-grid" class="grid-4">
   {% for m in items %}
   {% set tr = pick_media_tr(m) %}
   <a class="card" href="/{{ locale }}/media/{{ m.slug }}">
@@ -83,18 +83,66 @@
   {% endfor %}
 </div>
 
-{% if total_pages > 1 %}
-<div style="display:flex; align-items:center; justify-content:center; gap:10px; flex-wrap:wrap; margin-top:24px;">
-  {% if page > 1 %}
-  <a class="btn btn-secondary btn-sm" href="/{{ locale }}/catalog?q={{ selected_q|urlencode }}&type={{ selected_type }}&franchise={{ selected_franchise }}&sort={{ selected_sort }}&page={{ page - 1 }}">← {{ "Назад" if locale == "ru" else "Prev" }}</a>
-  {% endif %}
-  <span style="color:var(--muted); font-size:0.9rem;">{{ "Страница" if locale == "ru" else "Page" }} {{ page }} / {{ total_pages }}</span>
-  {% if page < total_pages %}
-  <a class="btn btn-secondary btn-sm" href="/{{ locale }}/catalog?q={{ selected_q|urlencode }}&type={{ selected_type }}&franchise={{ selected_franchise }}&sort={{ selected_sort }}&page={{ page + 1 }}">{{ "Дальше" if locale == "ru" else "Next" }} →</a>
-  {% endif %}
+{% if page < total_pages %}
+<div id="catalog-load-more-wrap" style="display:flex; flex-direction:column; align-items:center; gap:8px; margin-top:26px;">
+  <button
+    type="button"
+    id="catalog-load-more-btn"
+    class="btn btn-primary"
+    data-next-page="{{ page + 1 }}"
+    data-total-pages="{{ total_pages }}"
+    data-total-count="{{ total_count }}"
+    onclick="loadMoreCatalog(this)"
+  >
+    {{ "Показать ещё" if locale == "ru" else "Load More" }}
+  </button>
+  <span id="catalog-shown-info" style="color:var(--muted); font-size:0.86rem;">
+    {{ ("Показано " ~ items|length ~ " из " ~ total_count) if locale == "ru" else ("Showing " ~ items|length ~ " of " ~ total_count) }}
+  </span>
 </div>
 {% endif %}
 {% else %}
 <div class="panel">{{ ui.no_results }}</div>
 {% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+async function loadMoreCatalog(btn) {
+  const nextPage = Number(btn.dataset.nextPage || 2);
+  const totalPages = Number(btn.dataset.totalPages || 1);
+  const totalCount = Number(btn.dataset.totalCount || 0);
+  const grid = document.getElementById("catalog-grid");
+  const info = document.getElementById("catalog-shown-info");
+  const wrap = document.getElementById("catalog-load-more-wrap");
+  const isRu = "{{ locale }}" === "ru";
+
+  btn.disabled = true;
+  const origLabel = btn.textContent;
+  btn.textContent = isRu ? "Загрузка..." : "Loading...";
+
+  try {
+    const url = `/{{ locale }}/catalog?q={{ selected_q|urlencode }}&type={{ selected_type }}&franchise={{ selected_franchise }}&sort={{ selected_sort }}&page=${nextPage}`;
+    const res = await fetch(url);
+    if (!res.ok) return;
+    const html = await res.text();
+    const doc = new DOMParser().parseFromString(html, "text/html");
+    const newCards = doc.querySelectorAll("#catalog-grid .card");
+    newCards.forEach((card) => grid.appendChild(card));
+
+    const shown = grid.querySelectorAll(".card").length;
+    if (info) {
+      info.textContent = isRu ? `Показано ${shown} из ${totalCount}` : `Showing ${shown} of ${totalCount}`;
+    }
+    if (nextPage >= totalPages || newCards.length === 0) {
+      if (wrap) wrap.style.display = "none";
+    } else {
+      btn.dataset.nextPage = String(nextPage + 1);
+    }
+  } finally {
+    btn.disabled = false;
+    btn.textContent = origLabel;
+  }
+}
+</script>
 {% endblock %}

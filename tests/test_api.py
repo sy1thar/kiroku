@@ -620,12 +620,13 @@ def test_catalog_mixed_formats_recent_sort_and_pagination(client: TestClient):
     finally:
         db_gen.close()
 
-    # Default 'All formats' on page 1 must mix formats instead of showing 48 anime only
+    # Default 'All formats' on page 1 must mix formats and render inline Load More button
     cat_p1 = client.get("/ru/catalog")
     assert cat_p1.status_code == 200
     assert '<select name="type">' not in cat_p1.text
     assert "Freshly Looped Game" in cat_p1.text or "Свежая Игра" in cat_p1.text
-    assert "/ru/catalog?q=&amp;type=&amp;franchise=&amp;sort=popularity&amp;page=2" in cat_p1.text or "page=2" in cat_p1.text
+    assert 'id="catalog-load-more-btn"' in cat_p1.text
+    assert 'data-next-page="2"' in cat_p1.text
 
     # sort=recent shows newly imported items right at the top
     cat_recent = client.get("/ru/catalog?sort=recent")

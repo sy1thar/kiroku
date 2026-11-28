@@ -70,6 +70,7 @@ from app.services.importers.igdb import IGDBNotConfiguredError, import_from_igdb
 from app.services.importers.vndb import import_from_vndb
 from app.services.loop_manager import (
     get_loop_status,
+    get_startup_repair_status,
     request_stop_loop,
     set_loop_db_provider,
     start_background_loop,
@@ -82,7 +83,7 @@ router = APIRouter(prefix="/api", tags=["api"])
 
 @router.get("/health")
 def health():
-    return {"status": "ok", "service": "Kiroku"}
+    return {"status": "ok", "service": "Kiroku", "startup_repair": get_startup_repair_status()}
 
 
 @router.get("/search")

@@ -633,6 +633,11 @@ def test_catalog_mixed_formats_recent_sort_and_pagination(client: TestClient):
     assert cat_recent.status_code == 200
     assert "Свежая Игра" in cat_recent.text
 
+    # /api/media search finds low-popularity entries beyond the first 180 popularity rows
+    api_found = client.get("/api/media", params={"q": "Freshly Looped", "locale": "ru"})
+    assert api_found.status_code == 200
+    assert any(x["slug"] == "freshly-looped-game" for x in api_found.json()["items"])
+
     # page=2 loads next slice
     cat_p2 = client.get("/ru/catalog?page=2")
     assert cat_p2.status_code == 200

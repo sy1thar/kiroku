@@ -75,7 +75,10 @@ def list_media(
     else:
         stmt = stmt.order_by(desc(Media.popularity), desc(Media.rating))
 
-    rows = list(db.scalars(stmt.limit(limit * 3)).all())
+    if not query and not genre:
+        return list(db.scalars(stmt.limit(limit)).all())
+
+    rows = list(db.scalars(stmt).all())
     if query and query.strip():
         rows = [
             m

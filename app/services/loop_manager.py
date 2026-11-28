@@ -70,6 +70,11 @@ class LoopState:
 _STATE = LoopState()
 _TASK: asyncio.Task | None = None
 _DB_SESSION_PROVIDER = None
+_STARTUP_REPAIR_STATUS: dict = {"done": False, "fixed_media": 0, "fixed_chars": 0, "error": ""}
+
+
+def get_startup_repair_status() -> dict:
+    return dict(_STARTUP_REPAIR_STATUS)
 
 
 def set_loop_db_provider(provider_fn) -> None:
@@ -403,12 +408,12 @@ async def _run_translate_loop(locale: str, delay_ms: int) -> None:
 
 
 async def repair_translations_wave(db: Session, offset: int = 0, limit: int = 25) -> tuple[int, int]:
-    """Scan existing media rows to fix mismatched Shikimori titles (e.g. One Piece) or remaining English titles."""
+    """Scan existing media rows (newest first so newly broken items repair immediately) and fix wrong/EN titles."""
     rows = list(
         db.scalars(
             select(Media)
             .options(selectinload(Media.translations))
-            .order_by(Media.id.asc())
+            .order_by(Media.id.desc())
             .offset(offset)
             .limit(limit)
         ).all()
@@ -416,7 +421,7 @@ async def repair_translations_wave(db: Session, offset: int = 0, limit: int = 25
     if not rows:
         return 0, 0
 
-    sem = asyncio.Semaphore(10)
+    sem = asyncio.Semaphore(8)
 
     async def _check_fix(m: Media):
         if m.slug in ("elden-ring-game", "persona-5-royal-game"):
@@ -426,9 +431,21 @@ async def repair_translations_wave(db: Session, offset: int = 0, limit: int = 25
         if not ru_tr:
             return None
         is_shiki_type = m.media_type in ("anime", "manga", "manhwa", "manhua", "novel")
+        has_cy = _has_cyrillic(ru_tr.title)
+        absurd_shiki = len(ru_tr.title or "") > (len(m.canonical_title or "") * 2.3 + 25)
+        needs_syn = bool(en_tr and en_tr.synopsis and not _has_cyrillic(ru_tr.synopsis))
+        should_verify_shiki = is_shiki_type and (
+            (not has_cy)
+            or (m.media_type in ("manga", "manhwa", "manhua", "novel"))
+            or (ru_tr.source == "community_verified")
+            or absurd_shiki
+        )
+        if has_cy and not should_verify_shiki and not needs_syn:
+            return None
+
         async with sem:
             shiki_title, shiki_desc = ("", "")
-            if is_shiki_type:
+            if should_verify_shiki:
                 kind = "animes" if m.media_type == "anime" else "mangas"
                 shiki_title, shiki_desc = await fetch_shikimori_ru(
                     kind=kind,
@@ -442,9 +459,7 @@ async def repair_translations_wave(db: Session, offset: int = 0, limit: int = 25
                     new_s, _ = await translate_text(clean_html_markup(en_tr.synopsis)[:1400], "ru")
                 return (m, ru_tr, new_t, new_s, "community_verified")
 
-            absurd_shiki = len(ru_tr.title or "") > (len(m.canonical_title or "") * 2.3 + 25)
-            needs_repair = (not _has_cyrillic(ru_tr.title)) or (ru_tr.source == "community_verified" and is_shiki_type) or absurd_shiki
-            needs_syn = bool(en_tr and en_tr.synopsis and (not _has_cyrillic(ru_tr.synopsis) or needs_repair))
+            needs_repair = (not has_cy) or (ru_tr.source == "community_verified" and is_shiki_type) or absurd_shiki
             if not needs_repair and not needs_syn:
                 return None
 
@@ -504,34 +519,38 @@ async def _run_repair_loop(locale: str, delay_ms: int) -> None:
 
 
 async def run_startup_repair() -> None:
-    """Background pass executed automatically on production boot to fix corrupted/untranslated DB rows."""
-    await asyncio.sleep(2.0)
+    """Fast background pass executed on production boot to fix corrupted & untranslated DB rows immediately."""
+    await asyncio.sleep(1.0)
     offset = 0
     batch = 25
-    while True:
-        db, gen = _open_session()
-        try:
-            scanned, _fixed = await repair_translations_wave(db, offset=offset, limit=batch)
-        except Exception:
-            break
-        finally:
-            _close_session(db, gen)
-        if scanned < batch:
-            break
-        offset += batch
-        await asyncio.sleep(0.35)
+    try:
+        while True:
+            db, gen = _open_session()
+            try:
+                scanned, fixed = await repair_translations_wave(db, offset=offset, limit=batch)
+                _STARTUP_REPAIR_STATUS["fixed_media"] += fixed
+            finally:
+                _close_session(db, gen)
+            if scanned < batch:
+                break
+            offset += batch
+            await asyncio.sleep(0.2)
 
-    for _ in range(40):
-        db, gen = _open_session()
-        try:
-            m_cnt, c_cnt = await translate_missing_wave(db, target_locale="ru")
-        except Exception:
-            break
-        finally:
-            _close_session(db, gen)
-        if m_cnt == 0 and c_cnt == 0:
-            break
-        await asyncio.sleep(0.35)
+        for _ in range(40):
+            db, gen = _open_session()
+            try:
+                m_cnt, c_cnt = await translate_missing_wave(db, target_locale="ru")
+                _STARTUP_REPAIR_STATUS["fixed_media"] += m_cnt
+                _STARTUP_REPAIR_STATUS["fixed_chars"] += c_cnt
+            finally:
+                _close_session(db, gen)
+            if m_cnt == 0 and c_cnt == 0:
+                break
+            await asyncio.sleep(0.2)
+    except Exception as exc:
+        _STARTUP_REPAIR_STATUS["error"] = str(exc)
+    finally:
+        _STARTUP_REPAIR_STATUS["done"] = True
 
 
 async def _execute_loop(

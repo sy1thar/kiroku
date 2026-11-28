@@ -368,7 +368,24 @@ async def translate_text(text: str, target_locale: str) -> tuple[str, str]:
         except (httpx.HTTPError, ValueError, TypeError, IndexError):
             pass
 
-        # Mirror 2: Chrome dict endpoint (clients5.google.com)
+        # Mirror 2: Mozhi proxy (bypasses Render shared IP blocks on Google)
+        for mozhi_eng in ("google", "duckduckgo"):
+            try:
+                snippet = clean_text[:1200]
+                resp = await client.get(
+                    "https://mozhi.adminforge.de/api/translate",
+                    params={"engine": mozhi_eng, "from": src_lang, "to": target_locale, "text": snippet},
+                )
+                if resp.status_code == 200:
+                    translated = _polish_case(clean_text, (resp.json().get("translated-text") or ""))
+                    if translated and (target_locale != "ru" or _has_cyrillic(translated)):
+                        out = (translated, "ai_draft")
+                        _cache_put(_TEXT_CACHE, cache_key, out)
+                        return out
+            except (httpx.HTTPError, ValueError, TypeError, KeyError):
+                pass
+
+        # Mirror 3: Chrome dict endpoint (clients5.google.com)
         try:
             snippet = clean_text[:1500]
             resp = await client.get(
@@ -389,12 +406,12 @@ async def translate_text(text: str, target_locale: str) -> tuple[str, str]:
         except (httpx.HTTPError, ValueError, TypeError, IndexError):
             pass
 
-        # Mirror 3: MyMemory fallback
+        # Mirror 4: MyMemory with dedicated contact email (50k chars/day quota separate from cloud IP)
         try:
             snippet = clean_text[:480]
             resp = await client.get(
                 "https://api.mymemory.translated.net/get",
-                params={"q": snippet, "langpair": f"en|{target_locale}"},
+                params={"q": snippet, "langpair": f"en|{target_locale}", "de": "kiroku.enc@gmail.com"},
             )
             if resp.status_code == 200:
                 translated = _polish_case(

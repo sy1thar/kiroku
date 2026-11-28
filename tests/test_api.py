@@ -736,5 +736,22 @@ def test_shikimori_similarity_guard_and_long_title_safety(client: TestClient, mo
         db.refresh(sup)
         assert next(t for t in op.translations if t.locale == "ru").title == "Ван-Пис"
         assert next(t for t in sup.translations if t.locale == "ru").title == "Сверхъестественное"
+
+        # Verbose gender strings (e.g. Fushi from AniList) normalize safely without DB truncation
+        from app.services.importers.base import upsert_character_from_external
+        fushi = asyncio.run(
+            upsert_character_from_external(
+                db,
+                provider="anilist",
+                external_id="136548001",
+                external_url="https://anilist.co/character/136548",
+                canonical_name="Fushi",
+                native_name="フシ",
+                gender="male (in his main form; can be any)",
+                target_locale="ru",
+            )
+        )
+        db.commit()
+        assert fushi.gender == "male"
     finally:
         db_gen.close()

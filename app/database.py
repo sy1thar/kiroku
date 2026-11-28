@@ -54,10 +54,16 @@ def _ensure_text_columns() -> None:
     alters = [
         "ALTER TABLE media ALTER COLUMN canonical_title TYPE TEXT",
         "ALTER TABLE media ALTER COLUMN native_title TYPE TEXT",
+        "ALTER TABLE media ALTER COLUMN cover_url TYPE TEXT",
+        "ALTER TABLE media ALTER COLUMN banner_url TYPE TEXT",
         "ALTER TABLE media_translations ALTER COLUMN title TYPE TEXT",
         "ALTER TABLE characters ALTER COLUMN canonical_name TYPE TEXT",
         "ALTER TABLE characters ALTER COLUMN native_name TYPE TEXT",
+        "ALTER TABLE characters ALTER COLUMN gender TYPE VARCHAR(64)",
+        "ALTER TABLE characters ALTER COLUMN image_url TYPE TEXT",
         "ALTER TABLE character_translations ALTER COLUMN name TYPE TEXT",
+        "ALTER TABLE media_characters ALTER COLUMN voice_actor TYPE TEXT",
+        "ALTER TABLE media_characters ALTER COLUMN local_image_url TYPE TEXT",
     ]
     with engine.begin() as conn:
         for stmt in alters:

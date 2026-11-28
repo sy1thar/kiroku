@@ -69,6 +69,24 @@ def clean_html_markup(text: str | None) -> str:
     return re.sub(r"\n{3,}", "\n\n", text).strip()
 
 
+def normalize_gender(raw: str | None) -> str:
+    """Normalize verbose upstream gender descriptions (e.g. AniList free-text) into canonical keys."""
+    s = (raw or "").strip().lower()
+    if not s or s == "unknown":
+        return "unknown"
+    if s.startswith("female") or s == "f":
+        return "female"
+    if s.startswith("male") or s == "m":
+        return "male"
+    if any(w in s for w in ("female", "woman", "girl")):
+        return "female"
+    if any(w in s for w in ("male", "man", "boy")):
+        return "male"
+    if any(w in s for w in ("non", "other", "agender", "genderless", "herm")):
+        return "other"
+    return s[:30]
+
+
 def _unique_slug(db: Session, model_cls, base_slug: str) -> str:
     clipped = (base_slug or "entry")[:120].strip("-") or "entry"
     candidate = clipped
@@ -254,15 +272,20 @@ async def upsert_character_from_external(
     )
     character: Character | None = db.get(Character, mapping.entity_id) if mapping else None
 
+    clean_gender = normalize_gender(gender)
+    clean_hair = (hair_color or "unknown").strip().lower()[:38]
+    clean_eye = (eye_color or "unknown").strip().lower()[:38]
+    clean_role = (role or "supporting").strip().lower()[:30]
+
     if not character:
         slug = _unique_slug(db, Character, slugify(canonical_name))
         character = Character(
             slug=slug,
             canonical_name=canonical_name,
             native_name=native_name,
-            gender=gender,
-            hair_color=hair_color,
-            eye_color=eye_color,
+            gender=clean_gender,
+            hair_color=clean_hair,
+            eye_color=clean_eye,
             image_url=image_url,
             popularity=popularity,
         )
@@ -336,8 +359,8 @@ async def upsert_character_from_external(
                 MediaCharacter(
                     media_id=media_id,
                     character_id=character.id,
-                    role=role,
-                    voice_actor=voice_actor,
+                    role=clean_role,
+                    voice_actor=(voice_actor or "").strip(),
                     local_image_url=image_url,
                 )
             )

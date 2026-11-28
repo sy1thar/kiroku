@@ -400,3 +400,160 @@ def test_community_appearance_custom_traits_and_cosmetic_roles(client: TestClien
     client.post("/api/auth/login", json={"login": "cosmetic_user", "password": "secret123"})
     assert client.get("/ru/admin").status_code == 403
     assert client.get("/ru/import").status_code == 403
+    assert client.post("/api/import/batch", json={"category": "anime", "count": 10}).status_code == 403
+    assert (
+        client.post(
+            "/api/admin/media/1/import-characters",
+            json={"count": 12, "locale": "ru", "start_page": 1},
+        ).status_code
+        == 403
+    )
+    assert client.post("/api/admin/translate-missing").status_code == 403
+
+
+def test_auto_loop_ui_and_character_pagination(client: TestClient, monkeypatch):
+    """Admin sees continuous auto-loop controls and paginated character import supports start_page."""
+    from app.main import app
+    from app.database import get_db
+    from app.models import ExternalMapping, Media, MediaTranslation
+    from app.schemas import AdminImportCharactersRequest
+
+    # Schema accepts start_page for loop continuation
+    req = AdminImportCharactersRequest(count=12, locale="ru", start_page=3)
+    assert req.start_page == 3
+
+    # Register & log in as admin Ikazych1
+    login = client.post(
+        "/api/auth/register",
+        json={"username": "Ikazych1", "email": "mikolavelikodnij2@gmail.com", "password": "TestAdminPass1!"},
+    )
+    assert login.status_code == 200
+
+    # UI contains auto-loop controls on /ru/import, /ru/admin, and /ru/media/{slug}
+    imp_html = client.get("/ru/import").text
+    assert "loop-start-btn" in imp_html
+    assert "startBatchAutoLoop" in imp_html
+
+    adm_html = client.get("/ru/admin").text
+    assert "tr-loop-start-btn" in adm_html
+    assert "loopTranslateMissing" in adm_html
+
+    db_gen = app.dependency_overrides[get_db]()
+    db_session = next(db_gen)
+    try:
+        m = Media(slug="loop-test-anime", media_type="anime", canonical_title="Loop Test Anime", status="ongoing", release_year=2025)
+        db_session.add(m)
+        db_session.flush()
+        db_session.add(MediaTranslation(media_id=m.id, locale="ru", title="Луп Тест", synopsis="Тест"))
+        db_session.add(
+            ExternalMapping(
+                entity_type="media",
+                entity_id=m.id,
+                provider="anilist",
+                external_id="999999",
+                external_url="https://anilist.co/anime/999999",
+            )
+        )
+        db_session.commit()
+        media_id = m.id
+        media_slug = m.slug
+    finally:
+        db_gen.close()
+
+    det_html = client.get(f"/ru/media/{media_slug}").text
+    assert "char-loop-start-btn" in det_html
+    assert "adminLoopImportChars" in det_html
+
+    # Mock httpx.AsyncClient + Shikimori translation for 2 paginated waves of characters
+    import httpx
+
+    pages_seen = []
+
+    class FakeResp:
+        def __init__(self, payload, status_code=200):
+            self._payload = payload
+            self.status_code = status_code
+
+        def raise_for_status(self):
+            if self.status_code >= 400:
+                raise httpx.HTTPStatusError("err", request=None, response=None)
+
+        def json(self):
+            return self._payload
+
+    class FakeClient:
+        def __init__(self, *a, **kw):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def post(self, url, json=None, headers=None):
+            vars_ = (json or {}).get("variables") or {}
+            page = vars_.get("page", 1)
+            pages_seen.append(page)
+            if page == 1:
+                edges = [
+                    {"role": "MAIN", "node": {"id": 800001 + i, "name": {"full": f"Hero {i}"}, "description": "", "image": {}, "favourites": 10}, "voiceActors": []}
+                    for i in range(3)
+                ]
+                has_next = True
+            else:
+                edges = [
+                    {"role": "SUPPORTING", "node": {"id": 800010, "name": {"full": "Final Hero"}, "description": "", "image": {}, "favourites": 5}, "voiceActors": []}
+                ]
+                has_next = False
+            return FakeResp({"data": {"Media": {"characters": {"pageInfo": {"hasNextPage": has_next}, "edges": edges}}}})
+
+    async def noop_shiki(name):
+        return ""
+
+    async def noop_tr(text, target="ru"):
+        return text, False
+
+    monkeypatch.setattr("app.services.importers.anilist.httpx.AsyncClient", FakeClient)
+    monkeypatch.setattr("app.services.importers.anilist.fetch_shikimori_character_ru", noop_shiki)
+    monkeypatch.setattr("app.services.importers.anilist.translate_text", noop_tr)
+
+    wave1 = client.post(
+        f"/api/admin/media/{media_id}/import-characters",
+        json={"count": 2, "locale": "ru", "start_page": 1},
+    )
+    assert wave1.status_code == 200
+    d1 = wave1.json()
+    assert d1["added_count"] == 2
+    assert d1["next_page"] == 1
+    assert d1["has_more"] is True
+
+    wave2 = client.post(
+        f"/api/admin/media/{media_id}/import-characters",
+        json={"count": 5, "locale": "ru", "start_page": d1["next_page"]},
+    )
+    assert wave2.status_code == 200
+    d2 = wave2.json()
+    assert d2["added_count"] == 2
+    assert d2["has_more"] is False
+    assert pages_seen == [1, 1, 2]
+
+    # TVMaze 404 exhaustion returns cleanly with has_next_page=False instead of crashing loop
+    class Fake404Client:
+        def __init__(self, *a, **kw):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def get(self, url, params=None):
+            return FakeResp({}, status_code=404)
+
+    monkeypatch.setattr("app.services.importers.batch.httpx.AsyncClient", Fake404Client)
+    end_res = client.post("/api/import/batch", json={"category": "series", "count": 10})
+    assert end_res.status_code == 200
+    assert end_res.json()["has_next_page"] is False
+    assert end_res.json()["imported_count"] == 0

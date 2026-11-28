@@ -154,11 +154,44 @@ async def import_batch_from_games(db: Session, count: int = 10) -> dict:
             "https://steamspy.com/api.php",
             params={"request": "top100forever" if steam_page == 0 else "all", "page": steam_page},
         )
+        if sp_resp.status_code == 404:
+            return {
+                "category": "game",
+                "page_imported": cursor.next_page,
+                "next_page": cursor.next_page,
+                "has_next_page": False,
+                "total_imported": cursor.total_imported,
+                "imported_count": 0,
+                "items": [],
+            }
         sp_resp.raise_for_status()
         all_games = list((sp_resp.json() or {}).values())
 
         start = (offset_idx % 10) * count
         slice_games = all_games[start : start + count]
+
+        if not slice_games:
+            if steam_page == 0 and all_games:
+                cursor.next_page = 11
+                db.commit()
+                return {
+                    "category": "game",
+                    "page_imported": offset_idx + 1,
+                    "next_page": cursor.next_page,
+                    "has_next_page": True,
+                    "total_imported": cursor.total_imported,
+                    "imported_count": 0,
+                    "items": [],
+                }
+            return {
+                "category": "game",
+                "page_imported": cursor.next_page,
+                "next_page": cursor.next_page,
+                "has_next_page": False,
+                "total_imported": cursor.total_imported,
+                "imported_count": 0,
+                "items": [],
+            }
 
         sem = asyncio.Semaphore(5)
 
@@ -226,14 +259,16 @@ async def import_batch_from_games(db: Session, count: int = 10) -> dict:
             }
         )
 
-    cursor.next_page += 1
+    has_next = not (steam_page > 0 and start + count >= len(all_games) and len(all_games) < 1000)
+    if has_next:
+        cursor.next_page += 1
     cursor.total_imported += len(imported)
     db.commit()
     return {
         "category": "game",
-        "page_imported": cursor.next_page - 1,
+        "page_imported": offset_idx + 1,
         "next_page": cursor.next_page,
-        "has_next_page": len(all_games) > 0,
+        "has_next_page": has_next,
         "total_imported": cursor.total_imported,
         "imported_count": len(imported),
         "items": imported,
@@ -256,9 +291,41 @@ async def import_batch_from_series(db: Session, count: int = 10) -> dict:
 
     async with httpx.AsyncClient(timeout=15.0) as client:
         resp = await client.get("https://api.tvmaze.com/shows", params={"page": tvmaze_page})
+        if resp.status_code == 404:
+            return {
+                "category": "series",
+                "page_imported": cursor.next_page,
+                "next_page": cursor.next_page,
+                "has_next_page": False,
+                "total_imported": cursor.total_imported,
+                "imported_count": 0,
+                "items": [],
+            }
         resp.raise_for_status()
         shows = resp.json() or []
         slice_shows = shows[slice_offset : slice_offset + count]
+        if not slice_shows:
+            if shows:
+                cursor.next_page = ((tvmaze_page + 1) * 240 + count - 1) // count + 1
+                db.commit()
+                return {
+                    "category": "series",
+                    "page_imported": batch_index + 1,
+                    "next_page": cursor.next_page,
+                    "has_next_page": True,
+                    "total_imported": cursor.total_imported,
+                    "imported_count": 0,
+                    "items": [],
+                }
+            return {
+                "category": "series",
+                "page_imported": cursor.next_page,
+                "next_page": cursor.next_page,
+                "has_next_page": False,
+                "total_imported": cursor.total_imported,
+                "imported_count": 0,
+                "items": [],
+            }
 
         sem = asyncio.Semaphore(5)
 

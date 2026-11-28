@@ -227,7 +227,11 @@
     <p style="color:var(--muted); font-size:0.9rem;">
       {{ "Переводит названия, описания тайтлов и биографии персонажей на русский язык (до 15 тайтлов и 20 персонажей за нажатие)." if locale == "ru" else "Translate up to 15 titles and 20 character bios to Russian." }}
     </p>
-    <button type="button" class="btn btn-primary" onclick="translateMissing(this)">{{ "Доперевести английские записи (RU)" if locale == "ru" else "Translate Missing (RU)" }}</button>
+    <div style="display:flex; gap:10px; flex-wrap:wrap;">
+      <button type="button" class="btn btn-primary" onclick="translateMissing(this)">{{ "Доперевести английские записи (RU)" if locale == "ru" else "Translate Missing (RU)" }}</button>
+      <button type="button" id="tr-loop-start-btn" class="btn btn-primary" onclick="loopTranslateMissing()">{{ "▶ Доперевести ВСЁ циклом" if locale == "ru" else "▶ Loop Translate ALL" }}</button>
+      <button type="button" id="tr-loop-stop-btn" class="btn btn-secondary" style="color:#fda4af;" onclick="stopTranslateLoop()" disabled>{{ "⏹ Стоп" if locale == "ru" else "⏹ Stop" }}</button>
+    </div>
     <div id="translate-result" style="margin-top:12px; color:var(--muted);"></div>
   </div>
 </div>
@@ -432,6 +436,72 @@ async function translateMissing(btn) {
     out.textContent = `Localized media: ${data.translated_media}, characters: ${data.translated_characters}`;
   } finally {
     btn.disabled = false;
+  }
+}
+
+let trLoopStop = false;
+function stopTranslateLoop() {
+  trLoopStop = true;
+  document.getElementById("tr-loop-stop-btn").disabled = true;
+  document.getElementById("translate-result").textContent = "{{ 'Останавливаем после текущей волны...' if locale == 'ru' else 'Stopping after current wave...' }}";
+}
+
+async function loopTranslateMissing() {
+  const startBtn = document.getElementById("tr-loop-start-btn");
+  const stopBtn = document.getElementById("tr-loop-stop-btn");
+  const out = document.getElementById("translate-result");
+  trLoopStop = false;
+  startBtn.disabled = true;
+  stopBtn.disabled = false;
+
+  let totalMedia = 0;
+  let totalChars = 0;
+  let wave = 0;
+
+  try {
+    while (!trLoopStop) {
+      wave += 1;
+      out.style.color = "var(--muted)";
+      out.textContent = `{{ "Цикл перевода: волна" if locale == "ru" else "Translate loop wave" }} #${wave} · {{ "тайтлов" if locale == "ru" else "media" }}: ${totalMedia}, {{ "персонажей" if locale == "ru" else "chars" }}: ${totalChars}...`;
+
+      let data = null;
+      let ok = false;
+      for (let attempt = 0; attempt < 4; attempt++) {
+        if (trLoopStop) break;
+        const res = await fetch("/api/admin/translate-missing", { method: "POST" });
+        if ([429, 502, 503, 504].includes(res.status) && attempt < 3) {
+          out.style.color = "#fcd34d";
+          out.textContent = `HTTP ${res.status} — {{ "пауза 5 сек перед повтором..." if locale == "ru" else "retrying in 5s..." }}`;
+          await new Promise((r) => setTimeout(r, 5000));
+          continue;
+        }
+        data = await res.json().catch(() => ({}));
+        ok = res.ok;
+        break;
+      }
+
+      if (trLoopStop) break;
+      if (!ok) {
+        out.style.color = "#fda4af";
+        out.textContent = (data && data.detail) || "Translate error";
+        return;
+      }
+
+      const m = data.translated_media || 0;
+      const c = data.translated_characters || 0;
+      totalMedia += m;
+      totalChars += c;
+      if (m === 0 && c === 0) break;
+      await new Promise((r) => setTimeout(r, 1000));
+    }
+
+    out.style.color = "#6ee7b7";
+    out.textContent = trLoopStop
+      ? `{{ "Остановлено. Переведено тайтлов" if locale == "ru" else "Stopped. Translated media" }}: ${totalMedia}, {{ "персонажей" if locale == "ru" else "chars" }}: ${totalChars}`
+      : `{{ "✅ Всё переведено! Тайтлов" if locale == "ru" else "✅ All translated! Media" }}: ${totalMedia}, {{ "персонажей" if locale == "ru" else "chars" }}: ${totalChars}`;
+  } finally {
+    startBtn.disabled = false;
+    stopBtn.disabled = true;
   }
 }
 </script>

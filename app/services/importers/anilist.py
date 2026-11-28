@@ -504,6 +504,7 @@ async def import_more_characters_for_media(
     media_id: int,
     count: int = 12,
     locale: str = "ru",
+    start_page: int = 1,
 ) -> dict:
     """Batch-import additional unlinked characters directly into an existing media title (Admin)."""
     from app.models import ExternalMapping, Media, MediaCharacter
@@ -528,10 +529,12 @@ async def import_more_characters_for_media(
     if mapping.provider == "anilist":
         settings = get_settings()
         new_edges: list[dict] = []
-        page = 1
+        page = max(1, start_page)
+        max_page = page + 3
         has_next = True
+        broke_mid_page = False
         async with httpx.AsyncClient(timeout=15.0) as client:
-            while len(new_edges) < count and has_next and page <= 4:
+            while len(new_edges) < count and has_next and page <= max_page:
                 resp = await client.post(
                     settings.anilist_api_url,
                     json={
@@ -560,8 +563,12 @@ async def import_more_characters_for_media(
                         continue
                     new_edges.append(edge)
                     if len(new_edges) >= count:
+                        broke_mid_page = True
                         break
+                if broke_mid_page:
+                    break
                 page += 1
+        has_more = bool(broke_mid_page or has_next)
 
         sem = asyncio.Semaphore(4)
 
@@ -612,25 +619,37 @@ async def import_more_characters_for_media(
             added.append({"id": ch.id, "slug": ch.slug, "name": ru_name if locale == "ru" else cname})
 
         db.commit()
-        return {"media_id": media.id, "added_count": len(added), "characters": added}
+        return {
+            "media_id": media.id,
+            "added_count": len(added),
+            "next_page": page if broke_mid_page else page,
+            "has_more": has_more,
+            "characters": added,
+        }
 
     if mapping.provider == "vndb":
         settings = get_settings()
+        page = max(1, start_page)
         async with httpx.AsyncClient(timeout=15.0) as client:
             cr = await client.post(
                 f"{settings.vndb_api_url}/character",
                 json={
                     "filters": ["vn", "=", ["id", "=", mapping.external_id]],
                     "fields": "id, name, original, description, image.url, sex",
+                    "page": page,
                     "results": 25,
                 },
             )
             cr.raise_for_status()
-            rows = cr.json().get("results") or []
+            cr_json = cr.json()
+            rows = cr_json.get("results") or []
+            has_next = bool(cr_json.get("more"))
 
         added = []
+        broke_mid_page = False
         for ch_data in rows:
             if len(added) >= count:
+                broke_mid_page = True
                 break
             ext_map = db.scalar(
                 select(ExternalMapping).where(
@@ -659,6 +678,13 @@ async def import_more_characters_for_media(
             )
             added.append({"id": ch.id, "slug": ch.slug, "name": ch.canonical_name})
         db.commit()
-        return {"media_id": media.id, "added_count": len(added), "characters": added}
+        next_vndb_page = page if broke_mid_page else (page + 1 if has_next else page)
+        return {
+            "media_id": media.id,
+            "added_count": len(added),
+            "next_page": next_vndb_page,
+            "has_more": bool(broke_mid_page or has_next),
+            "characters": added,
+        }
 
     raise ValueError(f"Per-title character batch import is currently supported for AniList and VNDB (got {mapping.provider}).")

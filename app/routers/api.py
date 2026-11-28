@@ -650,7 +650,11 @@ async def api_admin_import_media_characters(
     require_admin(request, db)
     try:
         res = await import_more_characters_for_media(
-            db, media_id, count=payload.count, locale=payload.locale
+            db,
+            media_id,
+            count=payload.count,
+            locale=payload.locale,
+            start_page=payload.start_page,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

@@ -77,6 +77,7 @@ class AdminUsernameRoleRequest(BaseModel):
 class AdminImportCharactersRequest(BaseModel):
     count: int = Field(ge=1, le=20, default=12)
     locale: str = Field(pattern="^(ru|en)$", default="ru")
+    start_page: int = Field(ge=1, default=1)
 
 
 class CustomRoleCreateRequest(BaseModel):

@@ -12,7 +12,7 @@
   <p style="color:var(--muted); font-size:0.9rem; margin-top:0;">
     {{ "Доступно только администратору. Каждый клик загружает следующие 10 популярных тайтлов и персонажей, обновляя курсор страницы." if locale == "ru" else "Admin only. Each click fetches the next 10 titles and characters while advancing the saved cursor." }}
   </p>
-  <div style="display:flex; flex-wrap:wrap; gap:10px;">
+  <div style="display:flex; flex-wrap:wrap; gap:10px; margin-bottom:18px;">
     {% for cat_key, labels in media_type_labels.items() %}
     {% set cur = cursors.get(cat_key) %}
     <button
@@ -24,6 +24,66 @@
       +10 {{ labels[locale] }} (<span class="cur-page">{{ "стр." if locale == "ru" else "p." }} {{ cur.next_page if cur else 1 }}</span>)
     </button>
     {% endfor %}
+  </div>
+
+  <div style="border-top:1px solid var(--border); padding-top:16px;">
+    <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px; margin-bottom:10px;">
+      <h4 style="margin:0;">{{ "🔄 Непрерывный авто-цикл импорта (одной кнопкой)" if locale == "ru" else "🔄 Continuous Auto-Loop Importer" }}</h4>
+      <div style="display:flex; gap:8px;">
+        <button type="button" class="btn btn-secondary btn-sm" onclick="toggleLoopCats(true)">{{ "Выбрать все" if locale == "ru" else "Select All" }}</button>
+        <button type="button" class="btn btn-secondary btn-sm" onclick="toggleLoopCats(false)">{{ "Снять все" if locale == "ru" else "Clear All" }}</button>
+      </div>
+    </div>
+    <p style="color:var(--muted); font-size:0.86rem; margin:0 0 12px;">
+      {{ "Автоматически загружает тайтлы волнами по 10 штук подряд, пока выбранные категории не закончатся или вы не нажмёте «Стоп»." if locale == "ru" else "Automatically loops wave after wave of 10 titles until selected categories finish or you click Stop." }}
+    </p>
+    <div style="display:flex; flex-wrap:wrap; gap:10px; margin-bottom:12px;">
+      {% for cat_key, labels in media_type_labels.items() %}
+      <label style="display:inline-flex; align-items:center; gap:6px; padding:6px 10px; border:1px solid var(--border); border-radius:8px; background:var(--bg); cursor:pointer; font-size:0.88rem;">
+        <input type="checkbox" class="loop-cat-cb" value="{{ cat_key }}" data-label="{{ labels[locale] }}" checked />
+        <span>{{ labels[locale] }}</span>
+      </label>
+      {% endfor %}
+    </div>
+    <div style="display:flex; flex-wrap:wrap; gap:12px; align-items:end; margin-bottom:12px;">
+      <div class="field-group" style="max-width:150px; margin:0;">
+        <label>{{ "Размер волны" if locale == "ru" else "Batch size" }}</label>
+        <select id="loop-batch-size">
+          <option value="5">5</option>
+          <option value="10" selected>10 ({{ "реком." if locale == "ru" else "rec." }})</option>
+          <option value="15">15</option>
+        </select>
+      </div>
+      <div class="field-group" style="max-width:210px; margin:0;">
+        <label>{{ "Лимит за запуск" if locale == "ru" else "Max items per run" }}</label>
+        <select id="loop-max-items">
+          <option value="0" selected>{{ "Без лимита (до конца)" if locale == "ru" else "Unlimited (until end)" }}</option>
+          <option value="50">50</option>
+          <option value="100">100</option>
+          <option value="250">250</option>
+          <option value="500">500</option>
+        </select>
+      </div>
+      <div class="field-group" style="max-width:160px; margin:0;">
+        <label>{{ "Пауза (сек.)" if locale == "ru" else "Delay (sec)" }}</label>
+        <select id="loop-delay-ms">
+          <option value="800">0.8s</option>
+          <option value="1500" selected>1.5s ({{ "безопасно" if locale == "ru" else "safe" }})</option>
+          <option value="3000">3.0s</option>
+        </select>
+      </div>
+      <div style="display:flex; gap:8px;">
+        <button type="button" id="loop-start-btn" class="btn btn-primary" onclick="startBatchAutoLoop()">{{ "▶ Запустить авто-цикл" if locale == "ru" else "▶ Start Auto-Loop" }}</button>
+        <button type="button" id="loop-stop-btn" class="btn btn-secondary" style="color:#fda4af;" onclick="stopBatchAutoLoop()" disabled>{{ "⏹ Стоп" if locale == "ru" else "⏹ Stop" }}</button>
+      </div>
+    </div>
+    <div id="loop-status-box" style="display:none; padding:12px; border:1px solid var(--border); border-radius:10px; background:var(--bg);">
+      <div id="loop-status-text" style="font-size:0.9rem; font-weight:600; margin-bottom:8px;"></div>
+      <div style="height:8px; border-radius:999px; background:rgba(255,255,255,0.08); overflow:hidden; margin-bottom:8px;">
+        <div id="loop-progress-bar" style="height:100%; width:0%; background:linear-gradient(90deg, var(--accent), #38bdf8); transition:width 0.3s ease;"></div>
+      </div>
+      <div id="loop-log" style="max-height:170px; overflow-y:auto; font-size:0.82rem; color:var(--muted); display:flex; flex-direction:column; gap:4px;"></div>
+    </div>
   </div>
 </div>
 
@@ -102,6 +162,159 @@ async function runBatchImport(btn, category, count) {
   } catch (err) {
     box.innerHTML = `<div style="color:#fda4af;">Network error: ${err}</div>`;
   } finally {
+    allBtns.forEach((b) => b.disabled = false);
+  }
+}
+
+let batchLoopState = { running: false, stopRequested: false };
+
+function toggleLoopCats(checked) {
+  document.querySelectorAll(".loop-cat-cb").forEach((cb) => { cb.checked = checked; });
+}
+
+function appendLoopLog(line, color = "var(--muted)") {
+  const log = document.getElementById("loop-log");
+  const row = document.createElement("div");
+  row.style.color = color;
+  row.textContent = line;
+  log.prepend(row);
+}
+
+function stopBatchAutoLoop() {
+  batchLoopState.stopRequested = true;
+  document.getElementById("loop-stop-btn").disabled = true;
+  document.getElementById("loop-status-text").textContent = "{{ 'Останавливаем цикл после завершения текущей волны...' if locale == 'ru' else 'Stopping loop after current wave...' }}";
+}
+
+async function fetchWaveWithRetry(url, bodyObj, isStoppedFn) {
+  for (let attempt = 0; attempt < 4; attempt++) {
+    if (isStoppedFn()) return { stopped: true };
+    try {
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(bodyObj),
+      });
+      const text = await res.text();
+      let data = {};
+      try { data = JSON.parse(text); } catch { data = { detail: text.slice(0, 200) }; }
+      if ([429, 502, 503, 504].includes(res.status) && attempt < 3) {
+        appendLoopLog(`HTTP ${res.status} — {{ "пауза 5 сек перед повтором..." if locale == "ru" else "retrying in 5s..." }}`, "#fcd34d");
+        await new Promise((r) => setTimeout(r, 5000));
+        continue;
+      }
+      return { ok: res.ok, status: res.status, data };
+    } catch (err) {
+      if (attempt < 3) {
+        appendLoopLog(`Network error (${err}) — {{ "повтор через 5 сек..." if locale == "ru" else "retrying in 5s..." }}`, "#fcd34d");
+        await new Promise((r) => setTimeout(r, 5000));
+        continue;
+      }
+      return { ok: false, status: 0, data: { detail: String(err) } };
+    }
+  }
+  return { ok: false, status: 0, data: { detail: "Max retries exceeded" } };
+}
+
+async function startBatchAutoLoop() {
+  const selected = Array.from(document.querySelectorAll(".loop-cat-cb:checked")).map((cb) => ({
+    key: cb.value,
+    label: cb.dataset.label || cb.value,
+  }));
+  if (!selected.length) {
+    alert("{{ 'Выберите хотя бы одну категорию для авто-цикла' if locale == 'ru' else 'Select at least one category' }}");
+    return;
+  }
+
+  const batchSize = Number(document.getElementById("loop-batch-size").value || 10);
+  const maxItems = Number(document.getElementById("loop-max-items").value || 0);
+  const delayMs = Number(document.getElementById("loop-delay-ms").value || 1500);
+
+  batchLoopState = { running: true, stopRequested: false };
+  const startBtn = document.getElementById("loop-start-btn");
+  const stopBtn = document.getElementById("loop-stop-btn");
+  const allBtns = document.querySelectorAll(".batch-btn");
+  const statusBox = document.getElementById("loop-status-box");
+  const statusText = document.getElementById("loop-status-text");
+  const progressBar = document.getElementById("loop-progress-bar");
+  const resultsBox = document.getElementById("import-results");
+
+  startBtn.disabled = true;
+  stopBtn.disabled = false;
+  allBtns.forEach((b) => b.disabled = true);
+  statusBox.style.display = "block";
+  resultsBox.style.display = "block";
+  document.getElementById("loop-log").innerHTML = "";
+  progressBar.style.width = "0%";
+
+  let totalAdded = 0;
+  let totalWaves = 0;
+
+  try {
+    for (let idx = 0; idx < selected.length; idx++) {
+      if (batchLoopState.stopRequested) break;
+      const cat = selected[idx];
+      let emptyStreak = 0;
+
+      while (!batchLoopState.stopRequested) {
+        if (maxItems > 0 && totalAdded >= maxItems) {
+          batchLoopState.stopRequested = true;
+          break;
+        }
+        totalWaves += 1;
+        statusText.textContent = `[${idx + 1}/${selected.length}] ${cat.label} — {{ "волна" if locale == "ru" else "wave" }} #${totalWaves} · {{ "добавлено" if locale == "ru" else "added" }}: ${totalAdded}`;
+
+        const resp = await fetchWaveWithRetry(
+          "/api/import/batch",
+          { category: cat.key, count: batchSize },
+          () => batchLoopState.stopRequested,
+        );
+        if (resp.stopped) break;
+        if (!resp.ok) {
+          appendLoopLog(`[${cat.label}] HTTP ${resp.status}: ${resp.data.detail || "error"}`, "#fda4af");
+          break;
+        }
+
+        const data = resp.data;
+        const catBtn = document.querySelector(`.batch-btn[data-cat="${cat.key}"] .cur-page`);
+        if (catBtn && data.next_page) {
+          catBtn.textContent = `{{ "стр." if locale == "ru" else "p." }} ${data.next_page}`;
+        }
+        totalAdded += data.imported_count || 0;
+        if ((data.imported_count || 0) > 0) {
+          emptyStreak = 0;
+          renderImportedBox(data);
+        } else {
+          emptyStreak += 1;
+        }
+
+        appendLoopLog(
+          `[${cat.label} · {{ "стр." if locale == "ru" else "p." }} ${data.page_imported}] +${data.imported_count} ({{ "всего за запуск" if locale == "ru" else "session total" }}: ${totalAdded})`,
+          (data.imported_count || 0) > 0 ? "#6ee7b7" : "var(--muted)",
+        );
+
+        if (maxItems > 0) {
+          progressBar.style.width = `${Math.min(100, Math.round((totalAdded / maxItems) * 100))}%`;
+        } else {
+          progressBar.style.width = `${Math.round(((idx + (data.has_next_page ? 0.5 : 1)) / selected.length) * 100)}%`;
+        }
+
+        if (!data.has_next_page || emptyStreak >= 20) {
+          appendLoopLog(`[${cat.label}] {{ "категория завершена" if locale == "ru" else "category finished" }}.`, "#38bdf8");
+          break;
+        }
+        await new Promise((r) => setTimeout(r, delayMs));
+      }
+      progressBar.style.width = `${Math.round(((idx + 1) / selected.length) * 100)}%`;
+    }
+
+    statusText.textContent = batchLoopState.stopRequested
+      ? `{{ "Цикл остановлен. Всего добавлено тайтлов" if locale == "ru" else "Loop stopped. Total titles imported" }}: ${totalAdded}`
+      : `{{ "✅ Готово! Все выбранные категории обработаны. Всего добавлено" if locale == "ru" else "✅ Complete! All selected categories finished. Total imported" }}: ${totalAdded}`;
+  } finally {
+    batchLoopState.running = false;
+    startBtn.disabled = false;
+    stopBtn.disabled = true;
     allBtns.forEach((b) => b.disabled = false);
   }
 }

@@ -125,6 +125,7 @@ async def import_from_anilist(
                 kind=shiki_kind,
                 mal_id=item.get("idMal"),
                 search_title=titles.get("romaji") or canonical,
+                alt_titles=[canonical, titles.get("romaji") or ""],
             )
             desc_clean = clean_html_markup(item.get("description"))
             t_coro = translate_text(canonical, "ru") if not ru_title else asyncio.sleep(0, result=(ru_title, "api_raw"))
@@ -397,6 +398,7 @@ async def import_batch_from_anilist(
                 kind=shiki_kind,
                 mal_id=item.get("idMal"),
                 search_title=titles.get("romaji") or canonical,
+                alt_titles=[canonical, titles.get("romaji") or ""],
             )
             desc_clean = clean_html_markup(item.get("description"))
             t_coro = translate_text(canonical, "ru") if not ru_title else asyncio.sleep(0, result=(ru_title, "api_raw"))

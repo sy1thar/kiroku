@@ -162,9 +162,17 @@ async def translate_missing_wave(db: Session, target_locale: str = "ru") -> tupl
 
     async def _loc_m(entry):
         m, _ru_tr, en_tr, needs_title, needs_syn = entry
+        is_shiki_type = m.media_type in ("anime", "manga", "manhwa", "manhua", "novel")
         kind = "animes" if m.media_type == "anime" else "mangas"
         async with sem:
-            ru_title, ru_desc = await fetch_shikimori_ru(kind=kind, search_title=m.canonical_title)
+            if is_shiki_type:
+                ru_title, ru_desc = await fetch_shikimori_ru(
+                    kind=kind,
+                    search_title=m.canonical_title,
+                    alt_titles=[m.canonical_title, m.native_title],
+                )
+            else:
+                ru_title, ru_desc = "", ""
             t_coro = translate_text(m.canonical_title, "ru") if (needs_title and not ru_title) else asyncio.sleep(0, result=(ru_title, "api_raw"))
             s_coro = (
                 translate_text(clean_html_markup(en_tr.synopsis)[:1400], "ru")
@@ -393,6 +401,103 @@ async def _run_translate_loop(locale: str, delay_ms: int) -> None:
             await _sleep_interruptible(delay_ms / 1000.0)
 
 
+async def repair_translations_wave(db: Session, offset: int = 0, limit: int = 25) -> tuple[int, int]:
+    """Scan existing media rows to fix mismatched Shikimori titles (e.g. One Piece) or remaining English titles."""
+    rows = list(
+        db.scalars(
+            select(Media)
+            .options(selectinload(Media.translations))
+            .order_by(Media.id.asc())
+            .offset(offset)
+            .limit(limit)
+        ).all()
+    )
+    if not rows:
+        return 0, 0
+
+    sem = asyncio.Semaphore(10)
+
+    async def _check_fix(m: Media):
+        if m.slug in ("elden-ring-game", "persona-5-royal-game"):
+            return None
+        ru_tr = next((t for t in m.translations if t.locale == "ru"), None)
+        en_tr = next((t for t in m.translations if t.locale == "en"), None)
+        if not ru_tr:
+            return None
+        is_shiki_type = m.media_type in ("anime", "manga", "manhwa", "manhua", "novel")
+        async with sem:
+            shiki_title, shiki_desc = ("", "")
+            if is_shiki_type:
+                kind = "animes" if m.media_type == "anime" else "mangas"
+                shiki_title, shiki_desc = await fetch_shikimori_ru(
+                    kind=kind,
+                    search_title=m.canonical_title,
+                    alt_titles=[m.canonical_title, m.native_title],
+                )
+            if shiki_title and _has_cyrillic(shiki_title):
+                new_t = shiki_title
+                new_s = shiki_desc if (shiki_desc and _has_cyrillic(shiki_desc)) else ru_tr.synopsis
+                if not _has_cyrillic(new_s) and en_tr and en_tr.synopsis:
+                    new_s, _ = await translate_text(clean_html_markup(en_tr.synopsis)[:1400], "ru")
+                return (m, ru_tr, new_t, new_s, "community_verified")
+
+            needs_repair = (not _has_cyrillic(ru_tr.title)) or (ru_tr.source == "community_verified" and is_shiki_type)
+            needs_syn = bool(en_tr and en_tr.synopsis and (not _has_cyrillic(ru_tr.synopsis) or needs_repair))
+            if not needs_repair and not needs_syn:
+                return None
+
+            t_coro = translate_text(m.canonical_title, "ru") if needs_repair else asyncio.sleep(0, result=(ru_tr.title, ru_tr.source))
+            s_coro = (
+                translate_text(clean_html_markup(en_tr.synopsis)[:1400], "ru")
+                if (needs_syn and en_tr and en_tr.synopsis)
+                else asyncio.sleep(0, result=(ru_tr.synopsis, ru_tr.source))
+            )
+            (nt, _), (ns, nsrc) = await asyncio.gather(t_coro, s_coro)
+            return (m, ru_tr, nt, ns, nsrc)
+
+    fixes = await asyncio.gather(*[_check_fix(m) for m in rows])
+    changed = 0
+    for fx in fixes:
+        if not fx:
+            continue
+        _m, ru_tr, new_t, new_s, new_src = fx
+        updated = False
+        if new_t and _has_cyrillic(new_t) and new_t != ru_tr.title:
+            ru_tr.title = new_t
+            updated = True
+        if new_s and _has_cyrillic(new_s) and new_s != ru_tr.synopsis:
+            ru_tr.synopsis = new_s
+            ru_tr.source = new_src
+            updated = True
+        if updated:
+            changed += 1
+
+    if changed:
+        db.commit()
+    return len(rows), changed
+
+
+async def _run_repair_loop(locale: str, delay_ms: int) -> None:
+    offset = 0
+    batch = 25
+    while not _STATE.stop_requested:
+        _STATE.wave += 1
+        _STATE.current_label = f"Проверка и починка #{_STATE.wave} (с {offset})"
+        db, gen = _open_session()
+        try:
+            scanned, fixed = await repair_translations_wave(db, offset=offset, limit=batch)
+        finally:
+            _close_session(db, gen)
+        _STATE.added_total += fixed
+        _STATE.log(f"Волна #{_STATE.wave}: проверено {scanned}, исправлено {fixed}", "ok" if fixed else "muted")
+        if scanned < batch:
+            break
+        offset += batch
+        if delay_ms > 0:
+            await _sleep_interruptible(delay_ms / 1000.0)
+    await _run_translate_loop(locale, delay_ms)
+
+
 async def _execute_loop(
     kind: str,
     categories: list[str],
@@ -409,6 +514,8 @@ async def _execute_loop(
             await _run_characters_loop(categories, media_id, batch_size, max_items, delay_ms, locale)
         elif kind == "translate":
             await _run_translate_loop(locale, delay_ms)
+        elif kind == "repair":
+            await _run_repair_loop(locale, delay_ms)
         _STATE.status = "stopped" if _STATE.stop_requested else "completed"
         if _STATE.status == "completed":
             _STATE.progress_pct = 100

@@ -44,6 +44,27 @@ def init_db() -> None:
     Base.metadata.create_all(bind=engine)
     _ensure_user_columns()
     _ensure_media_columns()
+    _ensure_text_columns()
+
+
+def _ensure_text_columns() -> None:
+    """Widen title/name VARCHAR columns to TEXT on PostgreSQL so long manga/LN titles never truncate."""
+    if engine.dialect.name != "postgresql":
+        return
+    alters = [
+        "ALTER TABLE media ALTER COLUMN canonical_title TYPE TEXT",
+        "ALTER TABLE media ALTER COLUMN native_title TYPE TEXT",
+        "ALTER TABLE media_translations ALTER COLUMN title TYPE TEXT",
+        "ALTER TABLE characters ALTER COLUMN canonical_name TYPE TEXT",
+        "ALTER TABLE characters ALTER COLUMN native_name TYPE TEXT",
+        "ALTER TABLE character_translations ALTER COLUMN name TYPE TEXT",
+    ]
+    with engine.begin() as conn:
+        for stmt in alters:
+            try:
+                conn.execute(text(stmt))
+            except Exception:
+                pass
 
 
 def _ensure_media_columns() -> None:

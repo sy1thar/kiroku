@@ -76,7 +76,7 @@
       <div class="card-title">{{ tr.title if tr else m.canonical_title }}</div>
       <div class="card-meta">
         {% if m.release_year %}<span>{{ m.release_year }}</span>{% endif %}
-        {% for g in (m.genres or [])[:2] %}<span>· {{ g }}</span>{% endfor %}
+        {% for g in (m.genres or [])[:2] %}<span>· {{ t_genre(g) }}</span>{% endfor %}
       </div>
     </div>
   </a>

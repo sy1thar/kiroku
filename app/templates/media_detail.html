@@ -78,7 +78,7 @@
 
       {% if media.genres %}
       <div style="display:flex; flex-wrap:wrap; gap:6px; margin:14px 0;">
-        {% for g in media.genres %}<span class="badge">{{ g }}</span>{% endfor %}
+        {% for g in media.genres %}<span class="badge">{{ t_genre(g) }}</span>{% endfor %}
       </div>
       {% endif %}
 

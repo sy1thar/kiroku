@@ -159,6 +159,45 @@ SOURCE_BADGES: dict[str, dict[str, str]] = {
     "api_raw": {"ru": "Данные API", "en": "API Source"},
 }
 
+GENRE_LABELS: dict[str, str] = {
+    "Action": "Экшен",
+    "Adventure": "Приключения",
+    "Comedy": "Комедия",
+    "Drama": "Драма",
+    "Ecchi": "Этти",
+    "Fantasy": "Фэнтези",
+    "Horror": "Хоррор",
+    "Mahou Shoujo": "Махо-сёдзё",
+    "Mecha": "Меха",
+    "Music": "Музыка",
+    "Mystery": "Мистика / Детектив",
+    "Psychological": "Психология",
+    "Romance": "Романтика",
+    "Sci-Fi": "Фантастика",
+    "Science-Fiction": "Фантастика",
+    "Slice of Life": "Повседневность",
+    "Sports": "Спорт",
+    "Supernatural": "Сверхъестественное",
+    "Thriller": "Триллер",
+    "Crime": "Криминал",
+    "Espionage": "Шпионаж",
+    "Historical": "Исторический",
+    "Martial Arts": "Боевые искусства",
+    "Super Power": "Суперсила",
+    "Isekai": "Исекай",
+    "Shounen": "Сёнэн",
+    "Seinen": "Сэйнэн",
+    "Shoujo": "Сёдзё",
+    "RPG": "RPG",
+    "Indie": "Инди",
+}
+
+
+def t_genre(genre: str, locale: str) -> str:
+    if locale == "ru":
+        return GENRE_LABELS.get(genre, genre)
+    return genre
+
 LIST_STATUS_LABELS: dict[str, dict[str, str]] = {
     "active": {"ru": "В процессе", "en": "Active"},
     "completed": {"ru": "Завершено", "en": "Completed"},

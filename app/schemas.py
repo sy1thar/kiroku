@@ -44,7 +44,7 @@ class BatchImportRequest(BaseModel):
 
 
 class LoopStartRequest(BaseModel):
-    kind: str = Field(pattern="^(titles|characters_all|media_characters|translate)$")
+    kind: str = Field(pattern="^(titles|characters_all|media_characters|translate|repair)$")
     categories: list[str] = Field(default_factory=list)
     media_id: int | None = None
     batch_size: int = Field(ge=1, le=20, default=10)

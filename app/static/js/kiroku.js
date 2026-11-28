@@ -235,6 +235,7 @@
       characters_all: miniLocale === "ru" ? "Импорт персонажей" : "Characters Loop",
       media_characters: miniLocale === "ru" ? "Персонажи тайтла" : "Title Characters",
       translate: miniLocale === "ru" ? "Локализация (RU)" : "Localization",
+      repair: miniLocale === "ru" ? "Починка переводов" : "Repair Translations",
     };
 
     function renderMini(data) {
@@ -264,7 +265,7 @@
           (data.added_total || 0);
         if (data.kind === "media_characters" && data.media_slug) {
           miniLink.href = `/${miniLocale}/media/${data.media_slug}`;
-        } else if (data.kind === "translate") {
+        } else if (data.kind === "translate" || data.kind === "repair") {
           miniLink.href = `/${miniLocale}/admin`;
         } else {
           miniLink.href = `/${miniLocale}/import`;

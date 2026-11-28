@@ -637,3 +637,81 @@ def test_catalog_mixed_formats_recent_sort_and_pagination(client: TestClient):
     cat_p2 = client.get("/ru/catalog?page=2")
     assert cat_p2.status_code == 200
     assert "Топ Аниме" in cat_p2.text
+
+
+def test_shikimori_similarity_guard_and_long_title_safety(client: TestClient, monkeypatch):
+    """Strict Shikimori title guard rejects unrelated titles, supports 300+ char titles, and translates genres."""
+    from app.database import get_db
+    from app.main import app
+    from app.models import Media, MediaTranslation
+    from app.services.importers.base import upsert_media_from_external
+    from app.services.loop_manager import repair_translations_wave
+    from app.services.translation import _title_similarity, fetch_shikimori_ru
+    import asyncio
+
+    # Verify similarity scoring rejects Yawarakai kara & Sasen sareta for One Piece / Way To Be The Evil Emperor
+    assert _title_similarity(["One Piece"], {"name": "Yawarakai kara", "russian": "Уютная раковина"}) < 0.5
+    assert _title_similarity(["One Piece"], {"name": "One Piece", "russian": "Ван-Пис"}) == 1.0
+    assert (
+        _title_similarity(
+            ["Way To Be The Evil Emperor"],
+            {"name": "Sasen sareta Munou Ouji wa Jitsuryoku wo Kakushitai", "russian": "Некомпетентный принц..."},
+        )
+        < 0.5
+    )
+
+    # Catalog renders translated RU genres
+    cat_ru = client.get("/ru/catalog")
+    assert "Экшен" in cat_ru.text or "Приключения" in cat_ru.text
+
+    # 300+ character title inserts cleanly without truncation
+    long_title = "Very Long Light Novel And Manhua Title " * 8
+    db_gen = app.dependency_overrides[get_db]()
+    db = next(db_gen)
+    try:
+        async def _fake_tr(txt, tgt):
+            return ("Очень длинное название " * 13).strip(), "ai_draft"
+
+        monkeypatch.setattr("app.services.importers.base.translate_text", _fake_tr)
+        media = asyncio.run(
+            upsert_media_from_external(
+                db,
+                provider="anilist",
+                external_id="987654321",
+                external_url="https://anilist.co/manga/987654321",
+                media_type="manhua",
+                canonical_title=long_title,
+                genres=["Action", "Fantasy"],
+                target_locale="ru",
+            )
+        )
+        db.commit()
+        assert len(media.canonical_title) > 255
+        assert len(media.slug) <= 130
+
+        # Repair tool restores mismatched Shikimori title on One Piece
+        op = Media(
+            slug="one-piece-repair-test",
+            media_type="manga",
+            canonical_title="One Piece",
+            popularity=500000,
+        )
+        db.add(op)
+        db.flush()
+        db.add(MediaTranslation(media_id=op.id, locale="ru", title="Уютная раковина", synopsis="", source="community_verified"))
+        db.add(MediaTranslation(media_id=op.id, locale="en", title="One Piece", synopsis="Pirates adventure.", source="api_raw"))
+        db.commit()
+
+        async def _mock_shiki(*, kind, mal_id=None, search_title="", alt_titles=None):
+            if search_title == "One Piece":
+                return "Ван-Пис", "Приключения пиратов за сокровищем."
+            return "", ""
+
+        monkeypatch.setattr("app.services.loop_manager.fetch_shikimori_ru", _mock_shiki)
+        _scanned, fixed = asyncio.run(repair_translations_wave(db, offset=0, limit=50))
+        assert fixed >= 1
+        db.refresh(op)
+        ru_tr = next(t for t in op.translations if t.locale == "ru")
+        assert ru_tr.title == "Ван-Пис"
+    finally:
+        db_gen.close()

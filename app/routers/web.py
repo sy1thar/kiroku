@@ -15,6 +15,7 @@ from app.i18n import (
     MEDIA_TYPE_LABELS,
     ROLE_LABELS,
     SOURCE_BADGES,
+    t_genre,
     t_ui,
 )
 from app.models import (
@@ -90,6 +91,7 @@ def _base_context(
         "list_status_labels": LIST_STATUS_LABELS,
         "pick_media_tr": lambda m: pick_media_translation(m, locale),
         "pick_char_tr": lambda c: pick_char_translation(c, locale),
+        "t_genre": lambda g: t_genre(g, locale),
     }
 
 

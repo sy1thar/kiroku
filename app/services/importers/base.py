@@ -70,10 +70,11 @@ def clean_html_markup(text: str | None) -> str:
 
 
 def _unique_slug(db: Session, model_cls, base_slug: str) -> str:
-    candidate = base_slug
+    clipped = (base_slug or "entry")[:120].strip("-") or "entry"
+    candidate = clipped
     idx = 2
     while db.scalar(select(model_cls.id).where(model_cls.slug == candidate)) is not None:
-        candidate = f"{base_slug}-{idx}"
+        candidate = f"{clipped}-{idx}"
         idx += 1
     return candidate
 

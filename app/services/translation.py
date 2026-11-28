@@ -1,4 +1,5 @@
 import asyncio
+from difflib import SequenceMatcher
 import re
 import weakref
 import httpx
@@ -8,6 +9,7 @@ from app.config import get_settings
 _SHIKI_HEADERS = {"User-Agent": "KirokuApp/1.0 (https://kiroku.local)"}
 _LOOP_CLIENTS: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, httpx.AsyncClient]" = weakref.WeakKeyDictionary()
 _LOOP_SEMS: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Semaphore]" = weakref.WeakKeyDictionary()
+_LOOP_TR_SEMS: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Semaphore]" = weakref.WeakKeyDictionary()
 _TEXT_CACHE: dict[tuple[str, str], tuple[str, str]] = {}
 _SHIKI_MEDIA_CACHE: dict[tuple[str, int | None, str], tuple[str, str]] = {}
 _SHIKI_CHAR_CACHE: dict[str, str] = {}
@@ -31,8 +33,17 @@ def _get_shiki_sem() -> asyncio.Semaphore:
     loop = asyncio.get_running_loop()
     sem = _LOOP_SEMS.get(loop)
     if sem is None:
-        sem = asyncio.Semaphore(6)
+        sem = asyncio.Semaphore(5)
         _LOOP_SEMS[loop] = sem
+    return sem
+
+
+def _get_tr_sem() -> asyncio.Semaphore:
+    loop = asyncio.get_running_loop()
+    sem = _LOOP_TR_SEMS.get(loop)
+    if sem is None:
+        sem = asyncio.Semaphore(6)
+        _LOOP_TR_SEMS[loop] = sem
     return sem
 
 
@@ -53,6 +64,39 @@ def _has_cyrillic(text: str) -> bool:
     return bool(re.search(r"[а-яА-ЯёЁ]", text or ""))
 
 
+def _norm_ascii(text: str) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", (text or "").lower()).strip()
+
+
+def _title_similarity(candidates: list[str], item: dict) -> float:
+    item_names = [item.get("name") or "", item.get("english") or ""] + list(item.get("synonyms") or [])
+    norm_cands = [_norm_ascii(c) for c in candidates if _norm_ascii(c)]
+    norm_items = [_norm_ascii(n) for n in item_names if _norm_ascii(n)]
+    if not norm_cands or not norm_items:
+        return 0.0
+    best = 0.0
+    for q in norm_cands:
+        for s in norm_items:
+            if q == s:
+                return 1.0
+            ratio = SequenceMatcher(None, q, s).ratio()
+            if ratio > best:
+                best = ratio
+    return best
+
+
+def _character_name_matches(query_name: str, shiki_name: str) -> bool:
+    q = _norm_ascii(query_name)
+    s = _norm_ascii(shiki_name)
+    if not q or not s:
+        return False
+    if q == s:
+        return True
+    if sorted(q.split()) == sorted(s.split()):
+        return True
+    return SequenceMatcher(None, q, s).ratio() >= 0.78
+
+
 async def _shiki_get(client: httpx.AsyncClient, url: str, params: dict | None = None) -> httpx.Response:
     async with _get_shiki_sem():
         resp = await client.get(url, params=params, headers=_SHIKI_HEADERS)
@@ -67,11 +111,13 @@ async def fetch_shikimori_ru(
     kind: str,
     mal_id: int | None = None,
     search_title: str = "",
+    alt_titles: list[str] | None = None,
 ) -> tuple[str, str]:
     """
-    Fetch canonical Russian title and synopsis from Shikimori API using pooled HTTP connections.
+    Fetch canonical Russian title and synopsis from Shikimori API with strict title-similarity verification.
     """
     endpoint_kind = "animes" if kind == "animes" else "mangas"
+    candidates = [t for t in ([search_title] + list(alt_titles or [])) if t and t.strip()]
     cache_key = (endpoint_kind, mal_id, search_title.strip().lower())
     if cache_key in _SHIKI_MEDIA_CACHE:
         return _SHIKI_MEDIA_CACHE[cache_key]
@@ -81,18 +127,36 @@ async def fetch_shikimori_ru(
         if mal_id:
             resp = await _shiki_get(client, f"https://shikimori.io/api/{endpoint_kind}/{mal_id}")
             if resp.status_code == 200:
-                item = resp.json()
-        if not item and search_title:
-            resp = await _shiki_get(
-                client,
-                f"https://shikimori.io/api/{endpoint_kind}",
-                params={"search": search_title, "limit": 1},
-            )
-            if resp.status_code == 200 and isinstance(resp.json(), list) and resp.json():
-                item = resp.json()[0]
+                node = resp.json()
+                if isinstance(node, dict) and node.get("russian"):
+                    item = node
+        if not item and candidates:
+            for query_term in candidates[:2]:
+                resp = await _shiki_get(
+                    client,
+                    f"https://shikimori.io/api/{endpoint_kind}",
+                    params={"search": query_term, "limit": 5},
+                )
+                if resp.status_code == 200 and isinstance(resp.json(), list):
+                    best_score = 0.0
+                    best_row: dict | None = None
+                    for row in resp.json():
+                        if not (row.get("russian") or "").strip():
+                            continue
+                        score = _title_similarity(candidates, row)
+                        if score >= 0.78 and score > best_score:
+                            best_score = score
+                            best_row = row
+                    if best_row:
+                        item = best_row
+                        break
         if item:
             ru_title = (item.get("russian") or "").strip()
             ru_desc = _clean_shikimori_bbcode(item.get("description"))
+            if not ru_desc and item.get("id"):
+                det = await _shiki_get(client, f"https://shikimori.io/api/{endpoint_kind}/{item['id']}")
+                if det.status_code == 200:
+                    ru_desc = _clean_shikimori_bbcode(det.json().get("description"))
             res = (ru_title, ru_desc)
             _cache_put(_SHIKI_MEDIA_CACHE, cache_key, res)
             return res
@@ -103,7 +167,7 @@ async def fetch_shikimori_ru(
 
 
 async def fetch_shikimori_character_ru(name: str) -> str:
-    """Fetch canonical Russian character name from Shikimori API using pooled HTTP connections."""
+    """Fetch canonical Russian character name from Shikimori API with strict name verification."""
     clean_name = name.strip()
     if not clean_name:
         return ""
@@ -117,12 +181,12 @@ async def fetch_shikimori_character_ru(name: str) -> str:
             "https://shikimori.io/api/characters/search",
             params={"search": clean_name},
         )
-        if resp.status_code == 200 and isinstance(resp.json(), list) and resp.json():
-            best = resp.json()[0]
-            ru_name = (best.get("russian") or "").strip()
-            if ru_name:
-                _cache_put(_SHIKI_CHAR_CACHE, cache_key, ru_name)
-                return ru_name
+        if resp.status_code == 200 and isinstance(resp.json(), list):
+            for row in resp.json()[:5]:
+                ru_name = (row.get("russian") or "").strip()
+                if ru_name and _character_name_matches(clean_name, row.get("name") or ""):
+                    _cache_put(_SHIKI_CHAR_CACHE, cache_key, ru_name)
+                    return ru_name
     except (httpx.HTTPError, ValueError, KeyError, IndexError):
         pass
     _cache_put(_SHIKI_CHAR_CACHE, cache_key, "")
@@ -131,7 +195,7 @@ async def fetch_shikimori_character_ru(name: str) -> str:
 
 async def translate_text(text: str, target_locale: str) -> tuple[str, str]:
     """
-    Translate text to target_locale using DeepL, OpenAI, Google GTX, or MyMemory fallback with pooling & caching.
+    Translate text to target_locale using DeepL, OpenAI, or resilient multi-mirror free translators.
     """
     clean_text = text.strip()
     if not clean_text:
@@ -201,44 +265,74 @@ async def translate_text(text: str, target_locale: str) -> tuple[str, str]:
         except (httpx.HTTPError, KeyError, IndexError):
             pass
 
-    # Free GTX translation fallback
-    try:
-        snippet = clean_text[:1800]
-        resp = await client.get(
-            "https://translate.googleapis.com/translate_a/single",
-            params={
-                "client": "gtx",
-                "sl": "auto",
-                "tl": target_locale,
-                "dt": "t",
-                "q": snippet,
-            },
-        )
-        if resp.status_code == 200:
-            data = resp.json()
-            chunks = [seg[0] for seg in (data[0] or []) if seg and seg[0]]
-            translated = "".join(chunks).strip()
-            if translated and (target_locale != "ru" or _has_cyrillic(translated)):
-                out = (translated, "ai_draft")
-                _cache_put(_TEXT_CACHE, cache_key, out)
-                return out
-    except (httpx.HTTPError, ValueError, TypeError, IndexError):
-        pass
+    is_mostly_ascii = bool(re.match(r"^[\x00-\x7F]+$", clean_text[:200]))
+    src_lang = "en" if is_mostly_ascii else "auto"
 
-    # Free MyMemory translation fallback (useful if GTX rate-limits shared cloud IPs)
-    try:
-        snippet = clean_text[:480]
-        resp = await client.get(
-            "https://api.mymemory.translated.net/get",
-            params={"q": snippet, "langpair": f"en|{target_locale}"},
-        )
-        if resp.status_code == 200:
-            translated = ((resp.json().get("responseData") or {}).get("translatedText") or "").strip()
-            if translated and (target_locale != "ru" or _has_cyrillic(translated)):
-                out = (translated, "ai_draft")
-                _cache_put(_TEXT_CACHE, cache_key, out)
-                return out
-    except (httpx.HTTPError, ValueError, TypeError, KeyError):
-        pass
+    async with _get_tr_sem():
+        # Mirror 1: Google GTX (with 429 retry)
+        try:
+            snippet = clean_text[:1800]
+            for attempt in range(2):
+                resp = await client.get(
+                    "https://translate.googleapis.com/translate_a/single",
+                    params={
+                        "client": "gtx",
+                        "sl": src_lang,
+                        "tl": target_locale,
+                        "dt": "t",
+                        "q": snippet,
+                    },
+                )
+                if resp.status_code == 429 and attempt == 0:
+                    await asyncio.sleep(0.6)
+                    continue
+                if resp.status_code == 200:
+                    data = resp.json()
+                    chunks = [seg[0] for seg in (data[0] or []) if seg and seg[0]]
+                    translated = "".join(chunks).strip()
+                    if translated and (target_locale != "ru" or _has_cyrillic(translated)):
+                        out = (translated, "ai_draft")
+                        _cache_put(_TEXT_CACHE, cache_key, out)
+                        return out
+                break
+        except (httpx.HTTPError, ValueError, TypeError, IndexError):
+            pass
+
+        # Mirror 2: Chrome dict endpoint (clients5.google.com)
+        try:
+            snippet = clean_text[:1500]
+            resp = await client.get(
+                "https://clients5.google.com/translate_a/t",
+                params={"client": "dict-chrome-ex", "sl": src_lang, "tl": target_locale, "q": snippet},
+            )
+            if resp.status_code == 200:
+                payload = resp.json()
+                translated = ""
+                if isinstance(payload, list) and payload:
+                    first = payload[0]
+                    translated = first[0] if isinstance(first, list) else str(first)
+                translated = (translated or "").strip()
+                if translated and (target_locale != "ru" or _has_cyrillic(translated)):
+                    out = (translated, "ai_draft")
+                    _cache_put(_TEXT_CACHE, cache_key, out)
+                    return out
+        except (httpx.HTTPError, ValueError, TypeError, IndexError):
+            pass
+
+        # Mirror 3: MyMemory fallback
+        try:
+            snippet = clean_text[:480]
+            resp = await client.get(
+                "https://api.mymemory.translated.net/get",
+                params={"q": snippet, "langpair": f"en|{target_locale}"},
+            )
+            if resp.status_code == 200:
+                translated = ((resp.json().get("responseData") or {}).get("translatedText") or "").strip()
+                if translated and "MYMEMORY WARNING" not in translated and (target_locale != "ru" or _has_cyrillic(translated)):
+                    out = (translated, "ai_draft")
+                    _cache_put(_TEXT_CACHE, cache_key, out)
+                    return out
+        except (httpx.HTTPError, ValueError, TypeError, KeyError):
+            pass
 
     return text, "api_raw"

@@ -436,13 +436,13 @@ def test_auto_loop_ui_and_character_pagination(client: TestClient, monkeypatch):
     assert "startTitlesAutoLoop" in imp_html
     assert "startCharsAutoLoop" in imp_html
     assert 'id="loop-stop-btn"' in imp_html and "display:none;" in imp_html
-    assert 'id="kiroku-loop-mini"' in imp_html
+    assert 'id="kiroku-loop-dock"' in imp_html
     assert "/static/js/kiroku.js?v=" in imp_html
 
     adm_html = client.get("/ru/admin").text
     assert "tr-loop-start-btn" in adm_html
     assert "loopTranslateMissing" in adm_html
-    assert 'id="kiroku-loop-mini"' in adm_html
+    assert 'id="kiroku-loop-dock"' in adm_html
 
     db_gen = app.dependency_overrides[get_db]()
     db_session = next(db_gen)
@@ -570,18 +570,31 @@ def test_auto_loop_ui_and_character_pagination(client: TestClient, monkeypatch):
     assert end_res.json()["has_next_page"] is False
     assert end_res.json()["imported_count"] == 0
 
-    # Background loop status & stop endpoints work and adhere to saved locale setting
+    # Concurrent background loops can run together, each tracked as its own job widget
     client.get("/set-locale/en?next=/en/import", follow_redirects=False)
-    loop_st = client.post(
+    loop1 = client.post(
         "/api/admin/loop/start",
         json={"kind": "characters_all", "categories": ["anime"], "batch_size": 10, "max_items": 10, "delay_ms": 0},
     )
-    assert loop_st.status_code == 200
-    assert loop_st.json()["locale"] == "en"
-    stop_res = client.post("/api/admin/loop/stop")
-    assert stop_res.status_code == 200
+    assert loop1.status_code == 200
+    assert loop1.json()["locale"] == "en"
+    loop2 = client.post(
+        "/api/admin/loop/start",
+        json={"kind": "media_characters", "media_id": media_id, "batch_size": 10, "max_items": 10, "delay_ms": 0},
+    )
+    assert loop2.status_code == 200
+    assert loop2.json()["job_id"] == f"media_characters:{media_id}"
+
     status_res = client.get("/api/admin/loop/status")
     assert status_res.status_code == 200
+    assert len(status_res.json()["jobs"]) >= 2
+
+    stop_one = client.post(f"/api/admin/loop/stop?job_id={loop2.json()['job_id']}")
+    assert stop_one.status_code == 200
+    stop_all = client.post("/api/admin/loop/stop")
+    assert stop_all.status_code == 200
+    dismiss_res = client.post("/api/admin/loop/dismiss")
+    assert dismiss_res.status_code == 200
 
 
 def test_catalog_mixed_formats_recent_sort_and_pagination(client: TestClient):

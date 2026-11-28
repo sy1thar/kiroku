@@ -265,20 +265,28 @@ async function adminImportMoreChars(btn, mediaId) {
 }
 
 let charLoopMediaId = {{ media.id }};
+let charLoopJobId = `media_characters:${charLoopMediaId}`;
 let charLoopHadReload = false;
 
 function stopCharLoop() {
-  if (window.KirokuLoop) window.KirokuLoop.stop();
+  if (window.KirokuLoop) window.KirokuLoop.stop(charLoopJobId);
 }
 
 async function adminLoopImportChars(mediaId) {
-  if (!window.KirokuLoop) return;
   const startBtn = document.getElementById("char-loop-start-btn");
   const stopBtn = document.getElementById("char-loop-stop-btn");
+  const msg = document.getElementById("admin-char-import-msg");
+  if (!window.KirokuLoop) {
+    if (msg) msg.textContent = "Reload page (Ctrl+F5) to load KirokuLoop";
+    return;
+  }
   if (startBtn) startBtn.disabled = true;
-  if (stopBtn) stopBtn.style.display = "inline-flex";
+  if (msg) {
+    msg.style.color = "var(--muted)";
+    msg.textContent = "{{ 'Запускаем цикл персонажей...' if locale == 'ru' else 'Starting character loop...' }}";
+  }
   charLoopHadReload = false;
-  await window.KirokuLoop.start({
+  const res = await window.KirokuLoop.start({
     kind: "media_characters",
     media_id: mediaId,
     batch_size: 20,
@@ -286,41 +294,53 @@ async function adminLoopImportChars(mediaId) {
     delay_ms: 200,
     locale: "{{ locale }}",
   });
+  if (res && !res.ok) {
+    if (startBtn) startBtn.disabled = false;
+    if (stopBtn) stopBtn.style.display = "none";
+    if (msg) {
+      msg.style.color = "#fda4af";
+      msg.textContent = (res.data && res.data.detail) || "Error starting loop";
+    }
+  } else if (stopBtn) {
+    stopBtn.style.display = "inline-flex";
+  }
 }
 
 if (window.KirokuLoop) {
   window.KirokuLoop.onStatus((st) => {
+    const jobs = Array.isArray(st.jobs) ? st.jobs : (st.kind ? [st] : []);
+    const mJob = jobs.find((j) => j.job_id === charLoopJobId);
+    if (!mJob) return;
+
     const startBtn = document.getElementById("char-loop-start-btn");
     const stopBtn = document.getElementById("char-loop-stop-btn");
     const controls = document.getElementById("char-import-controls");
     const msg = document.getElementById("admin-char-import-msg");
-    const isThisMedia = st.kind === "media_characters" && st.media_id === charLoopMediaId;
-    if (!isThisMedia) return;
 
-    if (st.active) {
+    if (mJob.active) {
       if (startBtn) startBtn.disabled = true;
       if (stopBtn) {
         stopBtn.style.display = "inline-flex";
-        stopBtn.disabled = Boolean(st.stop_requested);
+        stopBtn.disabled = Boolean(mJob.stop_requested);
       }
       if (msg) {
         msg.style.color = "var(--muted)";
-        msg.textContent = `${st.current_label || ""} · +${st.added_total || 0}`;
+        msg.textContent = `${mJob.current_label || ""} · +${mJob.added_total || 0}`;
       }
     } else {
       if (startBtn) startBtn.disabled = false;
       if (stopBtn) stopBtn.style.display = "none";
-      if (st.media_exhausted && controls) {
+      if (mJob.media_exhausted && controls) {
         controls.style.display = "none";
       }
-      if (msg && st.status !== "idle") {
-        msg.style.color = st.status === "error" ? "#fda4af" : "#6ee7b7";
+      if (msg && mJob.status !== "idle") {
+        msg.style.color = mJob.status === "error" ? "#fda4af" : "#6ee7b7";
         msg.textContent =
-          st.status === "completed"
-            ? `{{ "✅ Все персонажи загружены (+%s)" if locale == "ru" else "✅ All characters imported (+%s)" }}`.replace("%s", st.added_total || 0)
-            : `{{ "⏹ Остановлено (+%s)" if locale == "ru" else "⏹ Stopped (+%s)" }}`.replace("%s", st.added_total || 0);
+          mJob.status === "completed"
+            ? `{{ "✅ Все персонажи загружены (+%s)" if locale == "ru" else "✅ All characters imported (+%s)" }}`.replace("%s", mJob.added_total || 0)
+            : (mJob.status === "error" ? `⚠ ${mJob.last_error || "Error"}` : `{{ "⏹ Остановлено (+%s)" if locale == "ru" else "⏹ Stopped (+%s)" }}`.replace("%s", mJob.added_total || 0));
       }
-      if (!charLoopHadReload && (st.added_total || 0) > 0 && (st.status === "completed" || st.status === "stopped")) {
+      if (!charLoopHadReload && (mJob.added_total || 0) > 0 && (mJob.status === "completed" || mJob.status === "stopped")) {
         charLoopHadReload = true;
         setTimeout(() => location.reload(), 900);
       }

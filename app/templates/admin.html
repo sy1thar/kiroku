@@ -440,14 +440,16 @@ async function translateMissing(btn) {
   }
 }
 
+let activeToolsJobId = null;
+
 function stopTranslateLoop() {
-  if (window.KirokuLoop) window.KirokuLoop.stop();
+  if (window.KirokuLoop) window.KirokuLoop.stop(activeToolsJobId || undefined);
 }
 
 async function loopTranslateMissing() {
   if (!window.KirokuLoop) return;
+  activeToolsJobId = "translate";
   document.getElementById("tr-loop-start-btn").disabled = true;
-  document.getElementById("repair-loop-start-btn").disabled = true;
   document.getElementById("tr-loop-stop-btn").style.display = "inline-flex";
   await window.KirokuLoop.start({
     kind: "translate",
@@ -460,7 +462,7 @@ async function loopTranslateMissing() {
 
 async function loopRepairTranslations() {
   if (!window.KirokuLoop) return;
-  document.getElementById("tr-loop-start-btn").disabled = true;
+  activeToolsJobId = "repair";
   document.getElementById("repair-loop-start-btn").disabled = true;
   document.getElementById("tr-loop-stop-btn").style.display = "inline-flex";
   await window.KirokuLoop.start({
@@ -474,28 +476,32 @@ async function loopRepairTranslations() {
 
 if (window.KirokuLoop) {
   window.KirokuLoop.onStatus((st) => {
-    if (st.kind !== "translate" && st.kind !== "repair") return;
+    const jobs = Array.isArray(st.jobs) ? st.jobs : (st.kind ? [st] : []);
+    const trJob = jobs.find((j) => (j.kind === "translate" || j.kind === "repair") && j.active)
+      || jobs.find((j) => j.kind === "translate" || j.kind === "repair");
+    if (!trJob) return;
+    activeToolsJobId = trJob.job_id;
     const startBtn = document.getElementById("tr-loop-start-btn");
     const repairBtn = document.getElementById("repair-loop-start-btn");
     const stopBtn = document.getElementById("tr-loop-stop-btn");
     const out = document.getElementById("translate-result");
-    if (st.active) {
-      startBtn.disabled = true;
-      repairBtn.disabled = true;
+    if (trJob.active) {
+      startBtn.disabled = trJob.kind === "translate";
+      repairBtn.disabled = trJob.kind === "repair";
       stopBtn.style.display = "inline-flex";
-      stopBtn.disabled = Boolean(st.stop_requested);
+      stopBtn.disabled = Boolean(trJob.stop_requested);
       out.style.color = "var(--muted)";
-      out.textContent = `${st.current_label || ""} · +${st.added_total || 0}`;
+      out.textContent = `${trJob.current_label || ""} · +${trJob.added_total || 0}`;
     } else {
       startBtn.disabled = false;
       repairBtn.disabled = false;
       stopBtn.style.display = "none";
-      if (st.status !== "idle") {
-        out.style.color = st.status === "error" ? "#fda4af" : "#6ee7b7";
+      if (trJob.status !== "idle") {
+        out.style.color = trJob.status === "error" ? "#fda4af" : "#6ee7b7";
         out.textContent =
-          st.status === "completed"
-            ? `{{ "✅ Готово! Обработано/исправлено записей: %s" if locale == "ru" else "✅ Complete! Processed/fixed: %s" }}`.replace("%s", st.added_total || 0)
-            : `{{ "⏹ Остановлено. Обработано: %s" if locale == "ru" else "⏹ Stopped. Processed: %s" }}`.replace("%s", st.added_total || 0);
+          trJob.status === "completed"
+            ? `{{ "✅ Готово! Обработано/исправлено записей: %s" if locale == "ru" else "✅ Complete! Processed/fixed: %s" }}`.replace("%s", trJob.added_total || 0)
+            : `{{ "⏹ Остановлено. Обработано: %s" if locale == "ru" else "⏹ Stopped. Processed: %s" }}`.replace("%s", trJob.added_total || 0);
       }
     }
   });

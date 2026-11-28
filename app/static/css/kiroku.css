@@ -778,6 +778,18 @@ body.hide-cosmetics .avatar-frame-wrap {
   gap: 8px;
   font-weight: 700;
   color: var(--text);
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+}
+
+.loop-mini-widget.dragging .loop-mini-head {
+  cursor: grabbing;
+}
+
+.loop-mini-widget.dragging {
+  opacity: 0.96;
+  border-color: var(--accent);
 }
 
 .loop-mini-dot {

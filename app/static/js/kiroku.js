@@ -213,22 +213,13 @@
     });
   }
 
-  // Global Background Loop Poller & Mini-Window (Admin only)
-  const miniBox = document.getElementById("kiroku-loop-mini");
-  if (miniBox) {
-    const miniLocale = miniBox.dataset.locale || "ru";
-    const miniDot = document.getElementById("loop-mini-dot");
-    const miniTitle = document.getElementById("loop-mini-title");
-    const miniStop = document.getElementById("loop-mini-stop");
-    const miniClose = document.getElementById("loop-mini-close");
-    const miniInfo = document.getElementById("loop-mini-info");
-    const miniBar = document.getElementById("loop-mini-bar");
-    const miniStats = document.getElementById("loop-mini-stats");
-    const miniLink = document.getElementById("loop-mini-link");
+  // Global Concurrent Draggable Loop Widgets & Poller (Admin only)
+  const dockEl = document.getElementById("kiroku-loop-dock");
+  if (dockEl) {
+    const miniLocale = dockEl.dataset.locale || "ru";
     const listeners = [];
+    const widgetEls = new Map();
     let pollTimer = null;
-    let dismissed = false;
-    let seenActive = false;
 
     const kindNames = {
       titles: miniLocale === "ru" ? "Импорт тайтлов" : "Titles Loop",
@@ -238,39 +229,148 @@
       repair: miniLocale === "ru" ? "Починка переводов" : "Repair Translations",
     };
 
-    function renderMini(data) {
-      if (!data) return;
-      if (data.active) {
-        dismissed = false;
-        seenActive = true;
+    function applySavedOrStackedPos(el, jobId, idx) {
+      const saved = localStorage.getItem(`kiroku_widget_pos_${jobId}`);
+      if (saved) {
+        try {
+          const { left, top } = JSON.parse(saved);
+          const maxL = Math.max(8, window.innerWidth - 320);
+          const maxT = Math.max(8, window.innerHeight - 130);
+          el.style.left = `${Math.min(Math.max(8, left), maxL)}px`;
+          el.style.top = `${Math.min(Math.max(8, top), maxT)}px`;
+          el.style.right = "auto";
+          el.style.bottom = "auto";
+          return;
+        } catch {}
       }
-      const shouldShow = data.active || (seenActive && !dismissed && data.status && data.status !== "idle");
-      miniBox.style.display = shouldShow ? "flex" : "none";
-      if (shouldShow) {
-        miniTitle.textContent = kindNames[data.kind] || (miniLocale === "ru" ? "Цикл" : "Loop");
-        miniDot.style.display = data.active ? "inline-block" : "none";
-        miniStop.style.display = data.active ? "inline-flex" : "none";
-        miniStop.disabled = Boolean(data.stop_requested);
-        miniClose.style.display = data.active ? "none" : "inline-flex";
+      el.style.right = "18px";
+      el.style.bottom = `${18 + idx * 124}px`;
+      el.style.left = "auto";
+      el.style.top = "auto";
+    }
+
+    function makeDraggable(el, handle, jobId) {
+      let dragging = false;
+      let startX = 0, startY = 0, origLeft = 0, origTop = 0;
+
+      handle.addEventListener("pointerdown", (e) => {
+        if (e.target.closest("button") || e.target.closest("a")) return;
+        e.preventDefault();
+        const rect = el.getBoundingClientRect();
+        dragging = true;
+        startX = e.clientX;
+        startY = e.clientY;
+        origLeft = rect.left;
+        origTop = rect.top;
+        el.classList.add("dragging");
+        el.style.left = `${origLeft}px`;
+        el.style.top = `${origTop}px`;
+        el.style.right = "auto";
+        el.style.bottom = "auto";
+        handle.setPointerCapture(e.pointerId);
+      });
+
+      handle.addEventListener("pointermove", (e) => {
+        if (!dragging) return;
+        const maxL = Math.max(8, window.innerWidth - el.offsetWidth - 8);
+        const maxT = Math.max(8, window.innerHeight - el.offsetHeight - 8);
+        const nextL = Math.min(Math.max(8, origLeft + (e.clientX - startX)), maxL);
+        const nextT = Math.min(Math.max(8, origTop + (e.clientY - startY)), maxT);
+        el.style.left = `${nextL}px`;
+        el.style.top = `${nextT}px`;
+      });
+
+      const endDrag = () => {
+        if (!dragging) return;
+        dragging = false;
+        el.classList.remove("dragging");
+        localStorage.setItem(
+          `kiroku_widget_pos_${jobId}`,
+          JSON.stringify({ left: parseFloat(el.style.left), top: parseFloat(el.style.top) })
+        );
+      };
+      handle.addEventListener("pointerup", endDrag);
+      handle.addEventListener("pointercancel", endDrag);
+    }
+
+    function createWidgetEl(jobId, idx) {
+      const el = document.createElement("div");
+      el.className = "loop-mini-widget";
+      el.dataset.jobId = jobId;
+      el.innerHTML = `
+        <div class="loop-mini-head" title="${miniLocale === "ru" ? "Перетащите мышкой" : "Drag to move"}">
+          <div style="display:flex; align-items:center; gap:7px; min-width:0;">
+            <span style="color:var(--muted); font-size:0.78rem; letter-spacing:-1px;">⋮⋮</span>
+            <span class="loop-mini-dot"></span>
+            <span class="w-title" style="white-space:nowrap; overflow:hidden; text-overflow:ellipsis;"></span>
+          </div>
+          <div style="display:flex; align-items:center; gap:6px;">
+            <button type="button" class="btn btn-secondary btn-sm w-stop" style="display:none; color:#fda4af; padding:3px 9px; font-size:0.76rem;">${miniLocale === "ru" ? "⏹ Стоп" : "⏹ Stop"}</button>
+            <button type="button" class="btn btn-secondary btn-sm w-close" style="display:none; padding:2px 8px; font-size:0.78rem;">×</button>
+          </div>
+        </div>
+        <div class="w-info" style="color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;"></div>
+        <div class="loop-mini-bar-wrap"><div class="loop-mini-bar w-bar"></div></div>
+        <div style="display:flex; align-items:center; justify-content:space-between; font-size:0.78rem; color:var(--muted);">
+          <span class="w-stats"></span>
+          <a class="w-link" href="/${miniLocale}/import" style="color:var(--accent);">${miniLocale === "ru" ? "Открыть →" : "Open →"}</a>
+        </div>
+      `;
+      el.querySelector(".w-stop").addEventListener("click", () => window.KirokuLoop.stop(jobId));
+      el.querySelector(".w-close").addEventListener("click", () => window.KirokuLoop.dismiss(jobId));
+      makeDraggable(el, el.querySelector(".loop-mini-head"), jobId);
+      applySavedOrStackedPos(el, jobId, idx);
+      dockEl.appendChild(el);
+      widgetEls.set(jobId, el);
+      return el;
+    }
+
+    function renderAllWidgets(data) {
+      if (!data) return;
+      const jobs = Array.isArray(data.jobs) ? data.jobs : (data.status && data.status !== "idle" ? [data] : []);
+      const visibleIds = new Set();
+
+      jobs.forEach((job, idx) => {
+        if (!job.job_id || job.status === "idle") return;
+        visibleIds.add(job.job_id);
+        let el = widgetEls.get(job.job_id);
+        if (!el) {
+          el = createWidgetEl(job.job_id, idx);
+        }
+        const baseName = kindNames[job.kind] || (miniLocale === "ru" ? "Цикл" : "Loop");
+        el.querySelector(".w-title").textContent = job.title_hint ? `${baseName}: ${job.title_hint}` : baseName;
+        el.querySelector(".loop-mini-dot").style.display = job.active ? "inline-block" : "none";
+        const stopBtn = el.querySelector(".w-stop");
+        stopBtn.style.display = job.active ? "inline-flex" : "none";
+        stopBtn.disabled = Boolean(job.stop_requested);
+        el.querySelector(".w-close").style.display = job.active ? "none" : "inline-flex";
+
         let statusTag = "";
-        if (data.status === "completed") statusTag = miniLocale === "ru" ? "✅ Готово · " : "✅ Done · ";
-        else if (data.status === "stopped") statusTag = miniLocale === "ru" ? "⏹ Остановлено · " : "⏹ Stopped · ";
-        else if (data.status === "error") statusTag = "⚠ ";
-        miniInfo.textContent = statusTag + (data.current_label || "");
-        miniBar.style.width = `${data.progress_pct || 0}%`;
-        miniStats.textContent =
-          (miniLocale === "ru" ? "Волна #" : "Wave #") +
-          (data.wave || 0) +
-          " · +" +
-          (data.added_total || 0);
-        if (data.kind === "media_characters" && data.media_slug) {
-          miniLink.href = `/${miniLocale}/media/${data.media_slug}`;
-        } else if (data.kind === "translate" || data.kind === "repair") {
-          miniLink.href = `/${miniLocale}/admin`;
+        if (job.status === "completed") statusTag = miniLocale === "ru" ? "✅ Готово · " : "✅ Done · ";
+        else if (job.status === "stopped") statusTag = miniLocale === "ru" ? "⏹ Остановлено · " : "⏹ Stopped · ";
+        else if (job.status === "error") statusTag = "⚠ ";
+        el.querySelector(".w-info").textContent = statusTag + (job.current_label || "");
+        el.querySelector(".w-bar").style.width = `${job.progress_pct || 0}%`;
+        el.querySelector(".w-stats").textContent =
+          (miniLocale === "ru" ? "Волна #" : "Wave #") + (job.wave || 0) + " · +" + (job.added_total || 0);
+
+        const link = el.querySelector(".w-link");
+        if (job.kind === "media_characters" && job.media_slug) {
+          link.href = `/${miniLocale}/media/${job.media_slug}`;
+        } else if (job.kind === "translate" || job.kind === "repair") {
+          link.href = `/${miniLocale}/admin`;
         } else {
-          miniLink.href = `/${miniLocale}/import`;
+          link.href = `/${miniLocale}/import`;
+        }
+      });
+
+      for (const [jid, el] of widgetEls.entries()) {
+        if (!visibleIds.has(jid)) {
+          el.remove();
+          widgetEls.delete(jid);
         }
       }
+
       listeners.forEach((fn) => {
         try { fn(data); } catch (e) { console.error(e); }
       });
@@ -282,8 +382,8 @@
         const res = await fetch("/api/admin/loop/status", { cache: "no-store" });
         if (res.ok) {
           const data = await res.json();
-          renderMini(data);
-          if (data.active) {
+          renderAllWidgets(data);
+          if (data.any_active || data.active) {
             pollTimer = setTimeout(pollLoopStatus, 1400);
           }
         }
@@ -294,8 +394,6 @@
 
     window.KirokuLoop = {
       async start(payload) {
-        dismissed = false;
-        seenActive = true;
         const res = await fetch("/api/admin/loop/start", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -306,23 +404,24 @@
           showToast(data.detail || "Failed to start loop");
           return { ok: false, data };
         }
-        renderMini(data);
-        clearTimeout(pollTimer);
-        pollTimer = setTimeout(pollLoopStatus, 1000);
+        await pollLoopStatus();
         return { ok: true, data };
       },
-      async stop() {
-        miniStop.disabled = true;
-        const res = await fetch("/api/admin/loop/stop", { method: "POST" });
+      async stop(jobId) {
+        const url = jobId ? `/api/admin/loop/stop?job_id=${encodeURIComponent(jobId)}` : "/api/admin/loop/stop";
+        const res = await fetch(url, { method: "POST" });
         const data = await res.json().catch(() => ({}));
-        renderMini(data);
+        renderAllWidgets(data);
         clearTimeout(pollTimer);
         pollTimer = setTimeout(pollLoopStatus, 800);
         return data;
       },
-      dismiss() {
-        dismissed = true;
-        miniBox.style.display = "none";
+      async dismiss(jobId) {
+        const url = jobId ? `/api/admin/loop/dismiss?job_id=${encodeURIComponent(jobId)}` : "/api/admin/loop/dismiss";
+        const res = await fetch(url, { method: "POST" });
+        const data = await res.json().catch(() => ({}));
+        renderAllWidgets(data);
+        return data;
       },
       refresh: pollLoopStatus,
       onStatus(fn) {

@@ -69,6 +69,7 @@ from app.services.importers.batch import run_batch_import
 from app.services.importers.igdb import IGDBNotConfiguredError, import_from_igdb
 from app.services.importers.vndb import import_from_vndb
 from app.services.loop_manager import (
+    dismiss_loop_job,
     get_loop_status,
     get_startup_repair_status,
     request_stop_loop,
@@ -712,9 +713,23 @@ async def api_admin_loop_start(
 
 
 @router.post("/admin/loop/stop")
-def api_admin_loop_stop(request: Request, db: Session = Depends(get_db)):
+def api_admin_loop_stop(
+    request: Request,
+    job_id: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+):
     require_admin(request, db)
-    return request_stop_loop()
+    return request_stop_loop(job_id=job_id)
+
+
+@router.post("/admin/loop/dismiss")
+def api_admin_loop_dismiss(
+    request: Request,
+    job_id: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+):
+    require_admin(request, db)
+    return dismiss_loop_job(job_id=job_id)
 
 
 @router.get("/admin/custom-roles")

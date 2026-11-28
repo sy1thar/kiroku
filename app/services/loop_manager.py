@@ -22,11 +22,13 @@ from app.services.translation import (
 
 @dataclass
 class LoopState:
+    job_id: str = ""
     active: bool = False
     stop_requested: bool = False
     status: str = "idle"  # idle | running | stopping | completed | stopped | error
-    kind: str = ""  # titles | characters_all | media_characters | translate
+    kind: str = ""  # titles | characters_all | media_characters | translate | repair
     locale: str = "ru"
+    title_hint: str = ""
     current_label: str = ""
     wave: int = 0
     added_total: int = 0
@@ -47,11 +49,13 @@ class LoopState:
 
     def to_dict(self) -> dict:
         return {
+            "job_id": self.job_id,
             "active": self.active,
             "stop_requested": self.stop_requested,
             "status": self.status,
             "kind": self.kind,
             "locale": self.locale,
+            "title_hint": self.title_hint,
             "current_label": self.current_label,
             "wave": self.wave,
             "added_total": self.added_total,
@@ -67,8 +71,8 @@ class LoopState:
         }
 
 
-_STATE = LoopState()
-_TASK: asyncio.Task | None = None
+_JOBS: dict[str, LoopState] = {}
+_TASKS: dict[str, asyncio.Task] = {}
 _DB_SESSION_PROVIDER = None
 _STARTUP_REPAIR_STATUS: dict = {"done": False, "fixed_media": 0, "fixed_chars": 0, "error": ""}
 
@@ -78,7 +82,7 @@ def get_startup_repair_status() -> dict:
 
 
 def set_loop_db_provider(provider_fn) -> None:
-    """Optional override hook used in tests so background loop uses the test DB."""
+    """Optional override hook used in tests so background loops use the test DB."""
     global _DB_SESSION_PROVIDER
     _DB_SESSION_PROVIDER = provider_fn
 
@@ -101,41 +105,67 @@ def _close_session(db: Session, gen: object | None) -> None:
 
 
 def get_loop_status() -> dict:
-    return _STATE.to_dict()
+    jobs = [j.to_dict() for j in _JOBS.values()]
+    primary = next((j for j in reversed(jobs) if j["active"]), None) or (jobs[-1] if jobs else LoopState().to_dict())
+    out = dict(primary)
+    out["jobs"] = jobs
+    out["any_active"] = any(j["active"] for j in jobs)
+    return out
 
 
-def request_stop_loop() -> dict:
-    if _STATE.active:
-        _STATE.stop_requested = True
-        _STATE.status = "stopping"
-    return _STATE.to_dict()
+def request_stop_loop(job_id: str | None = None) -> dict:
+    if job_id:
+        job = _JOBS.get(job_id)
+        if job and job.active:
+            job.stop_requested = True
+            job.status = "stopping"
+        return job.to_dict() if job else get_loop_status()
+
+    for job in _JOBS.values():
+        if job.active:
+            job.stop_requested = True
+            job.status = "stopping"
+    return get_loop_status()
 
 
-async def _sleep_interruptible(seconds: float) -> None:
+def dismiss_loop_job(job_id: str | None = None) -> dict:
+    if job_id:
+        job = _JOBS.get(job_id)
+        if job and not job.active:
+            _JOBS.pop(job_id, None)
+            _TASKS.pop(job_id, None)
+    else:
+        for k in [k for k, v in _JOBS.items() if not v.active]:
+            _JOBS.pop(k, None)
+            _TASKS.pop(k, None)
+    return get_loop_status()
+
+
+async def _sleep_interruptible(state: LoopState, seconds: float) -> None:
     remaining = max(0.0, seconds)
-    while remaining > 0 and not _STATE.stop_requested:
+    while remaining > 0 and not state.stop_requested:
         step = min(0.25, remaining)
         await asyncio.sleep(step)
         remaining -= step
 
 
-async def _with_retry(coro_fn):
+async def _with_retry(state: LoopState, coro_fn):
     for attempt in range(4):
-        if _STATE.stop_requested:
+        if state.stop_requested:
             return None
         try:
             return await coro_fn()
         except httpx.HTTPStatusError as exc:
             code = exc.response.status_code if exc.response is not None else 502
             if code in (429, 502, 503, 504) and attempt < 3:
-                _STATE.log(f"HTTP {code} — пауза 4 сек перед повтором...", "warn")
-                await _sleep_interruptible(4.0)
+                state.log(f"HTTP {code} — пауза 4 сек перед повтором...", "warn")
+                await _sleep_interruptible(state, 4.0)
                 continue
             raise
         except httpx.HTTPError as exc:
             if attempt < 3:
-                _STATE.log(f"Сетевая пауза ({exc}) — повтор через 4 сек...", "warn")
-                await _sleep_interruptible(4.0)
+                state.log(f"Сетевая пауза ({exc}) — повтор через 4 сек...", "warn")
+                await _sleep_interruptible(state, 4.0)
                 continue
             raise
     return None
@@ -164,7 +194,7 @@ async def translate_missing_wave(db: Session, target_locale: str = "ru") -> tupl
         if needs_title or needs_syn:
             media_tasks.append((m, ru_tr, en_tr, needs_title, needs_syn))
 
-    sem = asyncio.Semaphore(12)
+    sem = asyncio.Semaphore(10)
 
     async def _loc_m(entry):
         m, _ru_tr, en_tr, needs_title, needs_syn = entry
@@ -179,7 +209,9 @@ async def translate_missing_wave(db: Session, target_locale: str = "ru") -> tupl
                 )
             else:
                 ru_title, ru_desc = "", ""
-            t_coro = translate_text(m.canonical_title, "ru") if (needs_title and not ru_title) else asyncio.sleep(0, result=(ru_title, "api_raw"))
+            wiki_ru = await fetch_wikipedia_ru(m.canonical_title, m.media_type) if (needs_title and not ru_title and not is_shiki_type) else ""
+            chosen_title = ru_title or wiki_ru
+            t_coro = translate_text(m.canonical_title, "ru") if (needs_title and not chosen_title) else asyncio.sleep(0, result=(chosen_title, "api_raw"))
             s_coro = (
                 translate_text(clean_html_markup(en_tr.synopsis)[:1400], "ru")
                 if (needs_syn and not (ru_desc and _has_cyrillic(ru_desc)) and en_tr and en_tr.synopsis)
@@ -239,23 +271,23 @@ async def translate_missing_wave(db: Session, target_locale: str = "ru") -> tupl
     return fixed_media, fixed_chars
 
 
-async def _run_titles_loop(categories: list[str], batch_size: int, max_items: int, delay_ms: int, locale: str) -> None:
+async def _run_titles_loop(state: LoopState, categories: list[str], batch_size: int, max_items: int, delay_ms: int, locale: str) -> None:
     cats = list(categories) if categories else list(MEDIA_TYPE_LABELS.keys())
     active_cats = list(cats)
     empty_streaks = {c: 0 for c in active_cats}
     total_cats = len(active_cats)
 
-    while active_cats and not _STATE.stop_requested:
+    while active_cats and not state.stop_requested:
         for cat in list(active_cats):
-            if _STATE.stop_requested:
+            if state.stop_requested:
                 break
-            if max_items > 0 and _STATE.added_total >= max_items:
-                _STATE.stop_requested = True
+            if max_items > 0 and state.added_total >= max_items:
+                state.stop_requested = True
                 break
 
             label = MEDIA_TYPE_LABELS.get(cat, {}).get(locale, cat)
-            _STATE.wave += 1
-            _STATE.current_label = f"{label}"
+            state.wave += 1
+            state.current_label = f"{label}"
 
             async def _step(c_key: str = cat):
                 db, gen = _open_session()
@@ -264,37 +296,38 @@ async def _run_titles_loop(categories: list[str], batch_size: int, max_items: in
                 finally:
                     _close_session(db, gen)
 
-            res = await _with_retry(_step)
-            if res is None or _STATE.stop_requested:
+            res = await _with_retry(state, _step)
+            if res is None or state.stop_requested:
                 break
 
             added = int(res.get("imported_count") or 0)
-            _STATE.added_total += added
-            _STATE.cursors[cat] = int(res.get("next_page") or 1)
-            _STATE.current_label = f"{label} · {'стр.' if locale == 'ru' else 'p.'} {res.get('page_imported')}"
+            state.added_total += added
+            state.cursors[cat] = int(res.get("next_page") or 1)
+            state.current_label = f"{label} · {'стр.' if locale == 'ru' else 'p.'} {res.get('page_imported')}"
             if res.get("items"):
-                _STATE.last_items = res["items"]
+                state.last_items = res["items"]
             empty_streaks[cat] = 0 if added > 0 else empty_streaks[cat] + 1
-            _STATE.log(
+            state.log(
                 f"[{label} · {'стр.' if locale == 'ru' else 'p.'} {res.get('page_imported')}] +{added}",
                 "ok" if added > 0 else "muted",
             )
 
             if not res.get("has_next_page") or empty_streaks[cat] >= 20:
-                _STATE.log(f"[{label}] {'категория завершена' if locale == 'ru' else 'finished'}", "info")
+                state.log(f"[{label}] {'категория завершена' if locale == 'ru' else 'finished'}", "info")
                 active_cats.remove(cat)
 
             if max_items > 0:
-                _STATE.progress_pct = min(100, int((_STATE.added_total / max_items) * 100))
+                state.progress_pct = min(100, int((state.added_total / max_items) * 100))
             elif total_cats > 0:
                 done_cats = total_cats - len(active_cats)
-                _STATE.progress_pct = min(99, max(5, int((done_cats / total_cats) * 100) or min(90, _STATE.wave * 4)))
+                state.progress_pct = min(99, max(5, int((done_cats / total_cats) * 100) or min(90, state.wave * 4)))
 
-            if delay_ms > 0 and not _STATE.stop_requested:
-                await _sleep_interruptible(delay_ms / 1000.0)
+            if delay_ms > 0 and not state.stop_requested:
+                await _sleep_interruptible(state, delay_ms / 1000.0)
 
 
 async def _run_characters_loop(
+    state: LoopState,
     categories: list[str],
     media_id: int | None,
     batch_size: int,
@@ -328,83 +361,87 @@ async def _run_characters_loop(
         _close_session(db, gen)
 
     if not targets:
-        _STATE.media_exhausted = True if media_id is not None else False
-        _STATE.progress_pct = 100
-        _STATE.log("Нет тайтлов с недогруженными персонажами." if locale == "ru" else "No titles remaining.", "info")
+        state.media_exhausted = True if media_id is not None else False
+        state.progress_pct = 100
+        state.log("Нет тайтлов с недогруженными персонажами." if locale == "ru" else "No titles remaining.", "info")
         return
 
+    if media_id is not None and targets:
+        state.title_hint = targets[0][2]
+        state.media_slug = targets[0][1]
+
     for idx, (mid, mslug, mtitle) in enumerate(targets):
-        if _STATE.stop_requested:
+        if state.stop_requested:
             break
-        _STATE.media_id = mid
-        _STATE.media_slug = mslug
+        state.media_id = mid
+        state.media_slug = mslug
         next_page = 1
         empty_streak = 0
-        while not _STATE.stop_requested:
-            if max_items > 0 and _STATE.added_total >= max_items:
-                _STATE.stop_requested = True
+        while not state.stop_requested:
+            if max_items > 0 and state.added_total >= max_items:
+                state.stop_requested = True
                 break
-            _STATE.wave += 1
-            _STATE.current_label = f"{mtitle} · {'стр.' if locale == 'ru' else 'p.'} {next_page}"
+            state.wave += 1
+            state.current_label = f"{mtitle} · {'стр.' if locale == 'ru' else 'p.'} {next_page}"
 
-            async def _step():
+            async def _step(target_id: int = mid, cur_p: int = next_page):
                 sdb, sgen = _open_session()
                 try:
                     return await import_more_characters_for_media(
                         sdb,
-                        mid,
+                        target_id,
                         count=batch_size,
                         locale=locale,
-                        start_page=next_page,
+                        start_page=cur_p,
                     )
                 finally:
                     _close_session(sdb, sgen)
 
-            res = await _with_retry(_step)
-            if res is None or _STATE.stop_requested:
+            res = await _with_retry(state, _step)
+            if res is None or state.stop_requested:
                 break
             added = int(res.get("added_count") or 0)
-            _STATE.added_total += added
+            state.added_total += added
             next_page = int(res.get("next_page") or (next_page + 1))
             if res.get("characters"):
-                _STATE.last_items = [
+                state.last_items = [
                     {"title": c["name"], "slug": c["slug"], "media_type": "character", "characters_linked": 1}
                     for c in res["characters"]
                 ]
             if res.get("media_exhausted"):
-                _STATE.media_exhausted = True
+                state.media_exhausted = True
             empty_streak = 0 if added > 0 else empty_streak + 1
-            _STATE.log(f"[{mtitle}] +{added} перс.", "ok" if added > 0 else "muted")
+            state.log(f"[{mtitle}] +{added} перс.", "ok" if added > 0 else "muted")
 
             if max_items > 0:
-                _STATE.progress_pct = min(100, int((_STATE.added_total / max_items) * 100))
+                state.progress_pct = min(100, int((state.added_total / max_items) * 100))
             else:
-                _STATE.progress_pct = int(((idx + (0.5 if res.get("has_more") else 1.0)) / len(targets)) * 100)
+                state.progress_pct = int(((idx + (0.5 if res.get("has_more") else 1.0)) / len(targets)) * 100)
 
             if not res.get("has_more") or empty_streak >= 3:
                 break
             if delay_ms > 0:
-                await _sleep_interruptible(delay_ms / 1000.0)
-        if not _STATE.stop_requested:
-            _STATE.progress_pct = int(((idx + 1) / len(targets)) * 100)
+                await _sleep_interruptible(state, delay_ms / 1000.0)
+        if not state.stop_requested:
+            state.progress_pct = int(((idx + 1) / len(targets)) * 100)
 
 
-async def _run_translate_loop(locale: str, delay_ms: int) -> None:
-    while not _STATE.stop_requested:
-        _STATE.wave += 1
-        _STATE.current_label = f"{'Волна перевода' if locale == 'ru' else 'Translate wave'} #{_STATE.wave}"
+async def _run_translate_loop(state: LoopState, locale: str, delay_ms: int) -> None:
+    while not state.stop_requested:
+        state.wave += 1
+        state.current_label = f"{'Волна перевода' if locale == 'ru' else 'Translate wave'} #{state.wave}"
         db, gen = _open_session()
         try:
             m_cnt, c_cnt = await translate_missing_wave(db, target_locale=locale)
         finally:
             _close_session(db, gen)
-        _STATE.added_total += m_cnt + c_cnt
-        _STATE.log(f"Волна #{_STATE.wave}: тайтлов +{m_cnt}, персов +{c_cnt}", "ok" if (m_cnt + c_cnt) else "muted")
+        state.added_total += m_cnt + c_cnt
+        state.log(f"Волна #{state.wave}: тайтлов +{m_cnt}, персов +{c_cnt}", "ok" if (m_cnt + c_cnt) else "muted")
         if m_cnt == 0 and c_cnt == 0:
-            _STATE.progress_pct = 100
+            state.progress_pct = 100
             break
         if delay_ms > 0:
-            await _sleep_interruptible(delay_ms / 1000.0)
+            await _sleep_interruptible(state, delay_ms / 1000.0)
 
 
 async def repair_translations_wave(db: Session, offset: int = 0, limit: int = 25) -> tuple[int, int]:
@@ -497,25 +534,25 @@ async def repair_translations_wave(db: Session, offset: int = 0, limit: int = 25
     return len(rows), changed
 
 
-async def _run_repair_loop(locale: str, delay_ms: int) -> None:
+async def _run_repair_loop(state: LoopState, locale: str, delay_ms: int) -> None:
     offset = 0
     batch = 25
-    while not _STATE.stop_requested:
-        _STATE.wave += 1
-        _STATE.current_label = f"Проверка и починка #{_STATE.wave} (с {offset})"
+    while not state.stop_requested:
+        state.wave += 1
+        state.current_label = f"Проверка и починка #{state.wave} (с {offset})"
         db, gen = _open_session()
         try:
             scanned, fixed = await repair_translations_wave(db, offset=offset, limit=batch)
         finally:
             _close_session(db, gen)
-        _STATE.added_total += fixed
-        _STATE.log(f"Волна #{_STATE.wave}: проверено {scanned}, исправлено {fixed}", "ok" if fixed else "muted")
+        state.added_total += fixed
+        state.log(f"Волна #{state.wave}: проверено {scanned}, исправлено {fixed}", "ok" if fixed else "muted")
         if scanned < batch:
             break
         offset += batch
         if delay_ms > 0:
-            await _sleep_interruptible(delay_ms / 1000.0)
-    await _run_translate_loop(locale, delay_ms)
+            await _sleep_interruptible(state, delay_ms / 1000.0)
+    await _run_translate_loop(state, locale, delay_ms)
 
 
 async def run_startup_repair() -> None:
@@ -553,7 +590,8 @@ async def run_startup_repair() -> None:
         _STARTUP_REPAIR_STATUS["done"] = True
 
 
-async def _execute_loop(
+async def _execute_job(
+    state: LoopState,
     kind: str,
     categories: list[str],
     media_id: int | None,
@@ -564,22 +602,22 @@ async def _execute_loop(
 ) -> None:
     try:
         if kind == "titles":
-            await _run_titles_loop(categories, batch_size, max_items, delay_ms, locale)
+            await _run_titles_loop(state, categories, batch_size, max_items, delay_ms, locale)
         elif kind in ("characters_all", "media_characters"):
-            await _run_characters_loop(categories, media_id, batch_size, max_items, delay_ms, locale)
+            await _run_characters_loop(state, categories, media_id, batch_size, max_items, delay_ms, locale)
         elif kind == "translate":
-            await _run_translate_loop(locale, delay_ms)
+            await _run_translate_loop(state, locale, delay_ms)
         elif kind == "repair":
-            await _run_repair_loop(locale, delay_ms)
-        _STATE.status = "stopped" if _STATE.stop_requested else "completed"
-        if _STATE.status == "completed":
-            _STATE.progress_pct = 100
+            await _run_repair_loop(state, locale, delay_ms)
+        state.status = "stopped" if state.stop_requested else "completed"
+        if state.status == "completed":
+            state.progress_pct = 100
     except Exception as exc:
-        _STATE.status = "error"
-        _STATE.last_error = str(exc)
-        _STATE.log(f"Ошибка цикла: {exc}", "err")
+        state.status = "error"
+        state.last_error = str(exc)
+        state.log(f"Ошибка цикла: {exc}", "err")
     finally:
-        _STATE.active = False
+        state.active = False
 
 
 def start_background_loop(
@@ -592,11 +630,17 @@ def start_background_loop(
     delay_ms: int,
     locale: str,
 ) -> dict:
-    global _TASK, _STATE
-    if _STATE.active:
-        raise ValueError("Another loop is already running. Stop it first.")
+    if kind == "media_characters" and media_id is not None:
+        job_id = f"media_characters:{media_id}"
+    else:
+        job_id = kind
 
-    _STATE = LoopState(
+    existing = _JOBS.get(job_id)
+    if existing and existing.active:
+        raise ValueError("This loop is already running.")
+
+    state = LoopState(
+        job_id=job_id,
         active=True,
         stop_requested=False,
         status="running",
@@ -609,7 +653,8 @@ def start_background_loop(
         progress_pct=0,
         media_id=media_id,
     )
-    _TASK = asyncio.create_task(
-        _execute_loop(kind, categories, media_id, batch_size, max_items, delay_ms, locale)
+    _JOBS[job_id] = state
+    _TASKS[job_id] = asyncio.create_task(
+        _execute_job(state, kind, categories, media_id, batch_size, max_items, delay_ms, locale)
     )
-    return _STATE.to_dict()
+    return state.to_dict()

@@ -74,7 +74,7 @@
       </div>
       <div style="display:flex; gap:8px;">
         <button type="button" id="loop-start-btn" class="btn btn-primary" onclick="startTitlesAutoLoop()">{{ "▶ Запустить авто-цикл" if locale == "ru" else "▶ Start Auto-Loop" }}</button>
-        <button type="button" id="loop-stop-btn" class="btn btn-secondary" style="display:none; color:#fda4af;" onclick="stopAnyLoop()">{{ "⏹ Стоп" if locale == "ru" else "⏹ Stop" }}</button>
+        <button type="button" id="loop-stop-btn" class="btn btn-secondary" style="display:none; color:#fda4af;" onclick="stopLoopKind('titles')">{{ "⏹ Стоп" if locale == "ru" else "⏹ Stop" }}</button>
       </div>
     </div>
     <div id="loop-status-box" style="display:none; padding:12px; border:1px solid var(--border); border-radius:10px; background:var(--bg);">
@@ -144,7 +144,7 @@
     </div>
     <div style="display:flex; gap:8px;">
       <button type="button" id="cloop-start-btn" class="btn btn-primary" onclick="startCharsAutoLoop()">{{ "▶ Запустить цикл персонажей" if locale == "ru" else "▶ Start Character Loop" }}</button>
-      <button type="button" id="cloop-stop-btn" class="btn btn-secondary" style="display:none; color:#fda4af;" onclick="stopAnyLoop()">{{ "⏹ Стоп" if locale == "ru" else "⏹ Stop" }}</button>
+      <button type="button" id="cloop-stop-btn" class="btn btn-secondary" style="display:none; color:#fda4af;" onclick="stopLoopKind('characters_all')">{{ "⏹ Стоп" if locale == "ru" else "⏹ Stop" }}</button>
     </div>
   </div>
   <div id="cloop-status-box" style="display:none; padding:12px; border:1px solid var(--border); border-radius:10px; background:var(--bg);">
@@ -268,12 +268,12 @@ function ensureLoopClient() {
       });
       const d = await r.json().catch(() => ({}));
       if (!r.ok) return { ok: false, data: d };
-      fallbackListeners.forEach((fn) => fn(d));
-      timer = setTimeout(poll, 1000);
+      await poll();
       return { ok: true, data: d };
     },
-    async stop() {
-      const r = await fetch("/api/admin/loop/stop", { method: "POST" });
+    async stop(jobId) {
+      const u = jobId ? `/api/admin/loop/stop?job_id=${encodeURIComponent(jobId)}` : "/api/admin/loop/stop";
+      const r = await fetch(u, { method: "POST" });
       const d = await r.json().catch(() => ({}));
       fallbackListeners.forEach((fn) => fn(d));
       return d;
@@ -285,8 +285,8 @@ function ensureLoopClient() {
 
 const _loopClient = ensureLoopClient();
 
-function stopAnyLoop() {
-  ensureLoopClient().stop();
+function stopLoopKind(jobId) {
+  ensureLoopClient().stop(jobId);
 }
 
 async function startTitlesAutoLoop() {
@@ -344,48 +344,57 @@ function renderLoopLogs(logEl, logs) {
 }
 
 _loopClient.onStatus((st) => {
+  const jobs = Array.isArray(st.jobs) ? st.jobs : (st.kind ? [st] : []);
+  const tJob = jobs.find((j) => j.kind === "titles");
+  const cJob = jobs.find((j) => j.kind === "characters_all");
+
   const tStart = document.getElementById("loop-start-btn");
   const tStop = document.getElementById("loop-stop-btn");
   const cStart = document.getElementById("cloop-start-btn");
   const cStop = document.getElementById("cloop-stop-btn");
   const batchBtns = document.querySelectorAll(".batch-btn");
 
-  batchBtns.forEach((b) => b.disabled = Boolean(st.active));
-  tStart.disabled = Boolean(st.active);
-  cStart.disabled = Boolean(st.active);
+  batchBtns.forEach((b) => b.disabled = Boolean(tJob && tJob.active));
+  tStart.disabled = Boolean(tJob && tJob.active);
+  cStart.disabled = Boolean(cJob && cJob.active);
 
-  tStop.style.display = st.active && st.kind === "titles" ? "inline-flex" : "none";
-  tStop.disabled = Boolean(st.stop_requested);
-  cStop.style.display = st.active && st.kind === "characters_all" ? "inline-flex" : "none";
-  cStop.disabled = Boolean(st.stop_requested);
+  tStop.style.display = (tJob && tJob.active) ? "inline-flex" : "none";
+  tStop.disabled = Boolean(tJob && tJob.stop_requested);
+  cStop.style.display = (cJob && cJob.active) ? "inline-flex" : "none";
+  cStop.disabled = Boolean(cJob && cJob.stop_requested);
 
-  if (st.cursors) {
-    for (const [cat, page] of Object.entries(st.cursors)) {
+  if (tJob && tJob.cursors) {
+    for (const [cat, page] of Object.entries(tJob.cursors)) {
       const span = document.querySelector(`.batch-btn[data-cat="${cat}"] .cur-page`);
       if (span) span.textContent = `${IMPORT_LOCALE === "ru" ? "стр." : "p."} ${page}`;
     }
   }
 
-  if (st.last_items && st.last_items.length) {
-    renderImportedBox({ imported_count: st.added_total, items: st.last_items });
+  const latestItemsJob = (tJob && tJob.last_items && tJob.last_items.length) ? tJob : ((cJob && cJob.last_items && cJob.last_items.length) ? cJob : null);
+  if (latestItemsJob) {
+    renderImportedBox({ imported_count: latestItemsJob.added_total, items: latestItemsJob.last_items });
   }
 
-  const endSuffix = !st.active
-    ? (st.status === "completed" ? " ✅" : st.status === "stopped" ? " ⏹" : st.status === "error" ? ` ⚠ ${st.last_error || ""}` : "")
-    : "";
-
-  if (st.kind === "titles") {
+  if (tJob && tJob.status !== "idle") {
+    const endSuffix = !tJob.active
+      ? (tJob.status === "completed" ? " ✅" : tJob.status === "stopped" ? " ⏹" : tJob.status === "error" ? ` ⚠ ${tJob.last_error || ""}` : "")
+      : "";
     document.getElementById("loop-status-box").style.display = "block";
     document.getElementById("loop-status-text").textContent =
-      `${st.current_label || ""} · ${IMPORT_LOCALE === "ru" ? "волна" : "wave"} #${st.wave} · +${st.added_total}${endSuffix}`;
-    document.getElementById("loop-progress-bar").style.width = `${st.progress_pct || 0}%`;
-    renderLoopLogs(document.getElementById("loop-log"), st.recent_logs);
-  } else if (st.kind === "characters_all") {
+      `${tJob.current_label || ""} · ${IMPORT_LOCALE === "ru" ? "волна" : "wave"} #${tJob.wave} · +${tJob.added_total}${endSuffix}`;
+    document.getElementById("loop-progress-bar").style.width = `${tJob.progress_pct || 0}%`;
+    renderLoopLogs(document.getElementById("loop-log"), tJob.recent_logs);
+  }
+
+  if (cJob && cJob.status !== "idle") {
+    const endSuffix = !cJob.active
+      ? (cJob.status === "completed" ? " ✅" : cJob.status === "stopped" ? " ⏹" : cJob.status === "error" ? ` ⚠ ${cJob.last_error || ""}` : "")
+      : "";
     document.getElementById("cloop-status-box").style.display = "block";
     document.getElementById("cloop-status-text").textContent =
-      `${st.current_label || ""} · ${IMPORT_LOCALE === "ru" ? "волна" : "wave"} #${st.wave} · +${st.added_total}${endSuffix}`;
-    document.getElementById("cloop-progress-bar").style.width = `${st.progress_pct || 0}%`;
-    renderLoopLogs(document.getElementById("cloop-log"), st.recent_logs);
+      `${cJob.current_label || ""} · ${IMPORT_LOCALE === "ru" ? "волна" : "wave"} #${cJob.wave} · +${cJob.added_total}${endSuffix}`;
+    document.getElementById("cloop-progress-bar").style.width = `${cJob.progress_pct || 0}%`;
+    renderLoopLogs(document.getElementById("cloop-log"), cJob.recent_logs);
   }
 });
 

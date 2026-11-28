@@ -1,4 +1,5 @@
 from pathlib import Path
+import time
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
@@ -43,6 +44,7 @@ from app.services.catalog import (
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 templates = Jinja2Templates(directory=str(Path(__file__).resolve().parent.parent / "templates"))
 router = APIRouter(tags=["web"])
+_ASSET_VERSION = str(int(time.time()))
 
 
 @router.get("/favicon.ico", include_in_schema=False)
@@ -77,6 +79,7 @@ def _base_context(
         "ui": t_ui(locale),
         "page_title": page_title,
         "path_suffix": path_suffix,
+        "asset_v": _ASSET_VERSION,
         "current_user": current_user,
         "media_type_labels": MEDIA_TYPE_LABELS,
         "color_labels": COLOR_LABELS,

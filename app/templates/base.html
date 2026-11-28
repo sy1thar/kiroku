@@ -8,7 +8,7 @@
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
   <link rel="alternate" hreflang="ru" href="/ru{{ path_suffix }}" />
   <link rel="alternate" hreflang="en" href="/en{{ path_suffix }}" />
-  <link rel="stylesheet" href="/static/css/kiroku.css" />
+  <link rel="stylesheet" href="/static/css/kiroku.css?v={{ asset_v }}" />
 </head>
 <body>
   <header class="site-header">
@@ -108,7 +108,7 @@
   {% endif %}
 
   <div id="kiroku-toast" class="toast"></div>
-  <script src="/static/js/kiroku.js"></script>
+  <script src="/static/js/kiroku.js?v={{ asset_v }}"></script>
   {% block scripts %}{% endblock %}
 </body>
 </html>

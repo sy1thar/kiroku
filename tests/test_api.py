@@ -437,6 +437,7 @@ def test_auto_loop_ui_and_character_pagination(client: TestClient, monkeypatch):
     assert "startCharsAutoLoop" in imp_html
     assert 'id="loop-stop-btn"' in imp_html and "display:none;" in imp_html
     assert 'id="kiroku-loop-mini"' in imp_html
+    assert "/static/js/kiroku.js?v=" in imp_html
 
     adm_html = client.get("/ru/admin").text
     assert "tr-loop-start-btn" in adm_html

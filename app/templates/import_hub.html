@@ -246,8 +246,47 @@ async function runBatchImport(btn, category, count) {
   }
 }
 
+function ensureLoopClient() {
+  if (window.KirokuLoop) return window.KirokuLoop;
+  const fallbackListeners = [];
+  let timer = null;
+  async function poll() {
+    clearTimeout(timer);
+    const r = await fetch("/api/admin/loop/status", { cache: "no-store" });
+    if (r.ok) {
+      const d = await r.json();
+      fallbackListeners.forEach((fn) => fn(d));
+      if (d.active) timer = setTimeout(poll, 1400);
+    }
+  }
+  window.KirokuLoop = {
+    async start(payload) {
+      const r = await fetch("/api/admin/loop/start", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) return { ok: false, data: d };
+      fallbackListeners.forEach((fn) => fn(d));
+      timer = setTimeout(poll, 1000);
+      return { ok: true, data: d };
+    },
+    async stop() {
+      const r = await fetch("/api/admin/loop/stop", { method: "POST" });
+      const d = await r.json().catch(() => ({}));
+      fallbackListeners.forEach((fn) => fn(d));
+      return d;
+    },
+    onStatus(fn) { fallbackListeners.push(fn); },
+  };
+  return window.KirokuLoop;
+}
+
+const _loopClient = ensureLoopClient();
+
 function stopAnyLoop() {
-  if (window.KirokuLoop) window.KirokuLoop.stop();
+  ensureLoopClient().stop();
 }
 
 async function startTitlesAutoLoop() {
@@ -256,8 +295,11 @@ async function startTitlesAutoLoop() {
     alert(IMPORT_LOCALE === "ru" ? "Выберите хотя бы одну категорию" : "Select at least one category");
     return;
   }
-  if (!window.KirokuLoop) return;
-  await window.KirokuLoop.start({
+  const box = document.getElementById("loop-status-box");
+  const txt = document.getElementById("loop-status-text");
+  box.style.display = "block";
+  txt.textContent = IMPORT_LOCALE === "ru" ? "Запускаем авто-цикл..." : "Starting loop...";
+  const res = await ensureLoopClient().start({
     kind: "titles",
     categories: cats,
     batch_size: Number(document.getElementById("loop-batch-size").value || 10),
@@ -265,6 +307,9 @@ async function startTitlesAutoLoop() {
     delay_ms: Number(document.getElementById("loop-delay-ms").value || 250),
     locale: IMPORT_LOCALE,
   });
+  if (res && !res.ok) {
+    txt.textContent = `⚠ ${(res.data && res.data.detail) || "Error starting loop"}`;
+  }
 }
 
 async function startCharsAutoLoop() {
@@ -274,8 +319,11 @@ async function startCharsAutoLoop() {
     alert(IMPORT_LOCALE === "ru" ? "Выберите категории или конкретный тайтл" : "Select categories or a title");
     return;
   }
-  if (!window.KirokuLoop) return;
-  await window.KirokuLoop.start({
+  const box = document.getElementById("cloop-status-box");
+  const txt = document.getElementById("cloop-status-text");
+  box.style.display = "block";
+  txt.textContent = IMPORT_LOCALE === "ru" ? "Запускаем цикл персонажей..." : "Starting character loop...";
+  const res = await ensureLoopClient().start({
     kind: "characters_all",
     categories: cats,
     media_id: mediaVal ? Number(mediaVal) : null,
@@ -284,6 +332,9 @@ async function startCharsAutoLoop() {
     delay_ms: Number(document.getElementById("cloop-delay-ms").value || 250),
     locale: IMPORT_LOCALE,
   });
+  if (res && !res.ok) {
+    txt.textContent = `⚠ ${(res.data && res.data.detail) || "Error starting loop"}`;
+  }
 }
 
 function renderLoopLogs(logEl, logs) {
@@ -292,51 +343,51 @@ function renderLoopLogs(logEl, logs) {
   logEl.innerHTML = logs.map((l) => `<div style="color:${colorMap[l.tone] || "var(--muted)"}">${l.text}</div>`).join("");
 }
 
-if (window.KirokuLoop) {
-  window.KirokuLoop.onStatus((st) => {
-    const tStart = document.getElementById("loop-start-btn");
-    const tStop = document.getElementById("loop-stop-btn");
-    const cStart = document.getElementById("cloop-start-btn");
-    const cStop = document.getElementById("cloop-stop-btn");
-    const batchBtns = document.querySelectorAll(".batch-btn");
+_loopClient.onStatus((st) => {
+  const tStart = document.getElementById("loop-start-btn");
+  const tStop = document.getElementById("loop-stop-btn");
+  const cStart = document.getElementById("cloop-start-btn");
+  const cStop = document.getElementById("cloop-stop-btn");
+  const batchBtns = document.querySelectorAll(".batch-btn");
 
-    batchBtns.forEach((b) => b.disabled = Boolean(st.active));
-    tStart.disabled = Boolean(st.active);
-    cStart.disabled = Boolean(st.active);
+  batchBtns.forEach((b) => b.disabled = Boolean(st.active));
+  tStart.disabled = Boolean(st.active);
+  cStart.disabled = Boolean(st.active);
 
-    tStop.style.display = st.active && st.kind === "titles" ? "inline-flex" : "none";
-    tStop.disabled = Boolean(st.stop_requested);
-    cStop.style.display = st.active && st.kind === "characters_all" ? "inline-flex" : "none";
-    cStop.disabled = Boolean(st.stop_requested);
+  tStop.style.display = st.active && st.kind === "titles" ? "inline-flex" : "none";
+  tStop.disabled = Boolean(st.stop_requested);
+  cStop.style.display = st.active && st.kind === "characters_all" ? "inline-flex" : "none";
+  cStop.disabled = Boolean(st.stop_requested);
 
-    if (st.cursors) {
-      for (const [cat, page] of Object.entries(st.cursors)) {
-        const span = document.querySelector(`.batch-btn[data-cat="${cat}"] .cur-page`);
-        if (span) span.textContent = `${IMPORT_LOCALE === "ru" ? "стр." : "p."} ${page}`;
-      }
+  if (st.cursors) {
+    for (const [cat, page] of Object.entries(st.cursors)) {
+      const span = document.querySelector(`.batch-btn[data-cat="${cat}"] .cur-page`);
+      if (span) span.textContent = `${IMPORT_LOCALE === "ru" ? "стр." : "p."} ${page}`;
     }
+  }
 
-    if (st.last_items && st.last_items.length) {
-      renderImportedBox({ imported_count: st.added_total, items: st.last_items });
-    }
+  if (st.last_items && st.last_items.length) {
+    renderImportedBox({ imported_count: st.added_total, items: st.last_items });
+  }
 
-    if (st.kind === "titles") {
-      document.getElementById("loop-status-box").style.display = "block";
-      document.getElementById("loop-status-text").textContent =
-        `${st.current_label || ""} · ${IMPORT_LOCALE === "ru" ? "волна" : "wave"} #${st.wave} · +${st.added_total}` +
-        (!st.active ? (st.status === "completed" ? " ✅" : st.status === "stopped" ? " ⏹" : "") : "");
-      document.getElementById("loop-progress-bar").style.width = `${st.progress_pct || 0}%`;
-      renderLoopLogs(document.getElementById("loop-log"), st.recent_logs);
-    } else if (st.kind === "characters_all") {
-      document.getElementById("cloop-status-box").style.display = "block";
-      document.getElementById("cloop-status-text").textContent =
-        `${st.current_label || ""} · ${IMPORT_LOCALE === "ru" ? "волна" : "wave"} #${st.wave} · +${st.added_total}` +
-        (!st.active ? (st.status === "completed" ? " ✅" : st.status === "stopped" ? " ⏹" : "") : "");
-      document.getElementById("cloop-progress-bar").style.width = `${st.progress_pct || 0}%`;
-      renderLoopLogs(document.getElementById("cloop-log"), st.recent_logs);
-    }
-  });
-}
+  const endSuffix = !st.active
+    ? (st.status === "completed" ? " ✅" : st.status === "stopped" ? " ⏹" : st.status === "error" ? ` ⚠ ${st.last_error || ""}` : "")
+    : "";
+
+  if (st.kind === "titles") {
+    document.getElementById("loop-status-box").style.display = "block";
+    document.getElementById("loop-status-text").textContent =
+      `${st.current_label || ""} · ${IMPORT_LOCALE === "ru" ? "волна" : "wave"} #${st.wave} · +${st.added_total}${endSuffix}`;
+    document.getElementById("loop-progress-bar").style.width = `${st.progress_pct || 0}%`;
+    renderLoopLogs(document.getElementById("loop-log"), st.recent_logs);
+  } else if (st.kind === "characters_all") {
+    document.getElementById("cloop-status-box").style.display = "block";
+    document.getElementById("cloop-status-text").textContent =
+      `${st.current_label || ""} · ${IMPORT_LOCALE === "ru" ? "волна" : "wave"} #${st.wave} · +${st.added_total}${endSuffix}`;
+    document.getElementById("cloop-progress-bar").style.width = `${st.progress_pct || 0}%`;
+    renderLoopLogs(document.getElementById("cloop-log"), st.recent_logs);
+  }
+});
 
 document.getElementById("live-import-form").addEventListener("submit", async (e) => {
   e.preventDefault();
